@@ -27,6 +27,27 @@ A terminal UI for managing Wi-Fi with NetworkManager, built with
 go build -o nmtui .
 ```
 
+### Reproducible build with Nix
+
+`flake.nix` pins nixpkgs and the Go toolchain through `flake.lock`, so every
+build uses an identical dependency set regardless of the host system:
+
+```sh
+nix build             # binary at ./result/bin/nmtui
+nix flake check       # builds the package and runs the test suite in the sandbox
+nix run .             # run the TUI straight from the flake
+```
+
+If you use [direnv](https://direnv.net/), `direnv allow` once — every shell in
+this directory then automatically uses the pinned dev shell (Go 1.27, gopls,
+make) via nix-direnv:
+
+```sh
+direnv allow
+go version            # reports the toolchain from the flake, not the system
+make build            # or: make check (vet + tests), make run, make install
+```
+
 ## Usage
 
 ```sh
