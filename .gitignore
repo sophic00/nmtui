@@ -2,3 +2,6 @@
 /result
 /result-*
 /.direnv/
+/src/
+/pkg/
+/*.pkg.tar.zst
