@@ -7,7 +7,11 @@ import (
 )
 
 func splitTerse(line string) []string {
-	var fields []string
+	if strings.IndexByte(line, '\\') == -1 {
+		return strings.Split(line, ":")
+	}
+
+	fields := make([]string, 0, 8)
 	var b strings.Builder
 	escaped := false
 
@@ -24,6 +28,9 @@ func splitTerse(line string) []string {
 		default:
 			b.WriteRune(r)
 		}
+	}
+	if escaped {
+		b.WriteRune('\\')
 	}
 	fields = append(fields, b.String())
 	return fields

@@ -17,6 +17,7 @@ func TestSplitTerse(t *testing.T) {
 		{"empty fields", "::", []string{"", "", ""}},
 		{"single field", "enabled", []string{"enabled"}},
 		{"trailing empty", "a:", []string{"a", ""}},
+		{"trailing backslash", "a\\", []string{"a\\"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
