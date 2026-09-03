@@ -78,3 +78,23 @@ func TestSavedFor(t *testing.T) {
 		t.Error("savedFor(empty) should be nil")
 	}
 }
+
+func TestSanitizeSSID(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"NormalNetwork", "NormalNetwork"},
+		{"Space Network", "Space Network"},
+		{"ANSI\x1b[31mRed\x1b[0m", "ANSI?[31mRed?[0m"},
+		{"Line\nBreak\rReturn", "Line?Break?Return"},
+		{"Tab\tSeparated", "Tab?Separated"},
+		{"Emoji 🔥 Network 🚀", "Emoji 🔥 Network 🚀"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := sanitizeSSID(tt.in); got != tt.want {
+			t.Errorf("sanitizeSSID(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

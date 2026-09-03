@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
@@ -411,7 +412,7 @@ func (m *Model) applyFilter() {
 
 	rows := make([]table.Row, 0, len(m.visible))
 	for _, ap := range m.visible {
-		name := ap.SSID
+		name := sanitizeSSID(ap.SSID)
 		if name == "" {
 			name = "(hidden network)"
 		}
@@ -493,7 +494,7 @@ func (m Model) View() string {
 	header := titleStyle.Render("nmtui") +
 		"  " + dimStyle.Render("Wi-Fi:") + " " + wifiTxt
 	if m.wifi.Active.Name != "" {
-		conn := m.wifi.Active.Name
+		conn := sanitizeSSID(m.wifi.Active.Name)
 		if m.wifi.IP != "" {
 			conn += " (" + m.wifi.IP + ")"
 		}
@@ -503,7 +504,7 @@ func (m Model) View() string {
 
 	switch m.mode {
 	case modePassword:
-		body := "Password for " + boldStyle.Render(m.connectSSID) +
+		body := "Password for " + boldStyle.Render(sanitizeSSID(m.connectSSID)) +
 			"\n\n" + m.pwdInput.View() +
 			"\n\n" + dimStyle.Render("enter: connect  ·  esc: cancel")
 		b.WriteString(boxStyle.Render(body))
@@ -512,9 +513,9 @@ func (m Model) View() string {
 		var q string
 		switch m.confirm {
 		case confirmForget:
-			q = "Forget saved network " + boldStyle.Render(m.pendingForget.Name) + "?"
+			q = "Forget saved network " + boldStyle.Render(sanitizeSSID(m.pendingForget.Name)) + "?"
 		case confirmDisconnect:
-			q = "Disconnect from " + boldStyle.Render(m.wifi.Active.Name) + "?"
+			q = "Disconnect from " + boldStyle.Render(sanitizeSSID(m.wifi.Active.Name)) + "?"
 		default:
 			q = "Are you sure?"
 		}
@@ -577,4 +578,19 @@ func onOffWord(on bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+func sanitizeSSID(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			b.WriteRune('?')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
