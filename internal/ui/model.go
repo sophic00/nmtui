@@ -51,11 +51,12 @@ type Model struct {
 	filtering     bool
 	connectSSID   string
 	pendingForget nm.SavedConnection
+	ifaceOverride string
 	width         int
 	height        int
 }
 
-func NewModel() Model {
+func NewModelWithDevice(device string) Model {
 	cols := []table.Column{
 		{Title: "", Width: 2},
 		{Title: "SIGNAL", Width: 6},
@@ -78,12 +79,17 @@ func NewModel() Model {
 	f.Prompt = "/"
 
 	return Model{
-		table:    t,
-		spinner:  spinner.New(spinner.WithSpinner(spinner.Dot)),
-		pwdInput: pwd,
-		filter:   f,
-		busy:     "scanning",
+		ifaceOverride: device,
+		table:         t,
+		spinner:       spinner.New(spinner.WithSpinner(spinner.Dot)),
+		pwdInput:      pwd,
+		filter:        f,
+		busy:          "scanning",
 	}
+}
+
+func NewModel() Model {
+	return NewModelWithDevice("")
 }
 
 type pollMsg time.Time
@@ -95,7 +101,7 @@ func pollCmd() tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(true), m.spinner.Tick, pollCmd())
+	return tea.Batch(m.refreshCmd(true), m.spinner.Tick, pollCmd())
 }
 
 type stateMsg struct {
@@ -120,11 +126,11 @@ type actionMsg struct {
 	rescan bool
 }
 
-func refreshCmd(rescan bool) tea.Cmd {
-	return tea.Batch(stateCmd(), apsCmd(rescan), savedCmd())
+func (m Model) refreshCmd(rescan bool) tea.Cmd {
+	return tea.Batch(m.stateCmd(), apsCmd(rescan), savedCmd())
 }
 
-func stateCmd() tea.Cmd {
+func (m Model) stateCmd() tea.Cmd {
 	return func() tea.Msg {
 		st, err := nm.GetStatus()
 		if err != nil {
@@ -133,6 +139,9 @@ func stateCmd() tea.Cmd {
 		w, err := nm.GetWifiState()
 		if err != nil {
 			return stateMsg{status: st, err: err}
+		}
+		if m.ifaceOverride != "" {
+			w.Device = m.ifaceOverride
 		}
 		return stateMsg{status: st, wifi: w}
 	}
@@ -210,7 +219,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		cmds = append(cmds, pollCmd())
 		if m.busy == "" && m.mode == modeList {
-			cmds = append(cmds, stateCmd())
+			cmds = append(cmds, m.stateCmd())
 		}
 		return m, tea.Batch(cmds...)
 
@@ -251,7 +260,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.setInfo(msg.info)
 		}
-		return m, refreshCmd(msg.rescan)
+		return m, m.refreshCmd(msg.rescan)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
