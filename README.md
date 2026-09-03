@@ -51,8 +51,18 @@ make build            # or: make check (vet + tests), make run, make install
 ## Usage
 
 ```sh
-./nmtui
+./nmtui [flags]
 ```
+
+### Flags
+
+| Flag | Description |
+| --- | --- |
+| `-i, --interface <name>` | Wi-Fi interface to manage (e.g. `wlan0`) |
+| `-v, --version` | Print version information and exit |
+| `-h, --help` | Show help information and exit |
+
+### Keybindings
 
 | Key | Action |
 | --- | --- |
@@ -63,6 +73,7 @@ make build            # or: make check (vet + tests), make run, make install
 | `d` | disconnect current network |
 | `f` | forget selected network's saved profile |
 | `/` | filter networks |
+| `esc` | clear active filter / dismiss message |
 | `q` / `ctrl+c` | quit |
 
 ## Notes
