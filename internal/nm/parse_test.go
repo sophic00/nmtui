@@ -64,6 +64,38 @@ func TestParseWifiListHiddenNetwork(t *testing.T) {
 	}
 }
 
+func TestParseWifiListDeduplication(t *testing.T) {
+	out := strings.Join([]string{
+		` :Infra:1:130 Mbit/s:50:WPA2:Campus`,
+		` :Infra:6:130 Mbit/s:85:WPA2:Campus`,
+		` :Infra:11:130 Mbit/s:65:WPA2:Campus`,
+		` :Infra:1:130 Mbit/s:70:WPA2:HomeNet`,
+		`*:Infra:6:130 Mbit/s:40:WPA2:HomeNet`, // In-use, weaker signal than 70
+		` :Infra:1:130 Mbit/s:80:WPA2:`,        // Hidden 1
+		` :Infra:6:130 Mbit/s:75:WPA2:`,        // Hidden 2
+	}, "\n")
+
+	aps := parseWifiList(out)
+	// Should have:
+	// 1. HomeNet (in-use, signal 40)
+	// 2. Campus (deduped, highest signal 85)
+	// 3. Hidden 1
+	// 4. Hidden 2
+	if len(aps) != 4 {
+		t.Fatalf("expected 4 APs after deduplication, got %d", len(aps))
+	}
+
+	if aps[0].SSID != "HomeNet" || !aps[0].InUse {
+		t.Errorf("expected in-use HomeNet first, got: %+v", aps[0])
+	}
+	if aps[1].SSID != "Campus" || aps[1].Signal != 85 {
+		t.Errorf("expected Campus with strongest signal 85, got: %+v", aps[1])
+	}
+	if aps[2].SSID != "" || aps[3].SSID != "" {
+		t.Errorf("expected both hidden networks preserved, got: %+v and %+v", aps[2], aps[3])
+	}
+}
+
 func TestParseSavedConnections(t *testing.T) {
 	out := strings.Join([]string{
 		`9379a045-40d0-4114-b2a6-451770aa9ebf:802-11-wireless:yes:J-VIT`,

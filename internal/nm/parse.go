@@ -57,7 +57,19 @@ func parseWifiList(out string) []AccessPoint {
 		}
 		return aps[i].Signal > aps[j].Signal
 	})
-	return aps
+
+	seen := make(map[string]bool, len(aps))
+	deduped := make([]AccessPoint, 0, len(aps))
+	for _, ap := range aps {
+		if ap.SSID != "" {
+			if seen[ap.SSID] {
+				continue
+			}
+			seen[ap.SSID] = true
+		}
+		deduped = append(deduped, ap)
+	}
+	return deduped
 }
 
 func parseSavedConnections(out string) []SavedConnection {
