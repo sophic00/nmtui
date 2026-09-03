@@ -138,14 +138,45 @@ func TestParseRadioState(t *testing.T) {
 }
 
 func TestParseGeneralStatus(t *testing.T) {
-	state, conn := parseGeneralStatus("connected:full\n")
-	if state != "connected" || conn != "full" {
-		t.Errorf("got state=%q connectivity=%q, want connected/full", state, conn)
+	state, conn, wifi := parseGeneralStatus("connected:full:enabled\n")
+	if state != "connected" || conn != "full" || !wifi {
+		t.Errorf("got state=%q connectivity=%q wifi=%v, want connected/full/true", state, conn, wifi)
 	}
 
-	state, conn = parseGeneralStatus("connected (locally):limited\n")
-	if state != "connected (locally)" || conn != "limited" {
-		t.Errorf("got state=%q connectivity=%q", state, conn)
+	state, conn, wifi = parseGeneralStatus("connected (locally):limited:disabled\n")
+	if state != "connected (locally)" || conn != "limited" || wifi {
+		t.Errorf("got state=%q connectivity=%q wifi=%v, want connected (locally)/limited/false", state, conn, wifi)
+	}
+
+	state, conn, wifi = parseGeneralStatus("connected:full\n")
+	if state != "connected" || conn != "full" || wifi {
+		t.Errorf("got state=%q connectivity=%q wifi=%v, want connected/full/false", state, conn, wifi)
+	}
+}
+
+func TestParseWifiDeviceStatus(t *testing.T) {
+	out := strings.Join([]string{
+		`wlan0:wifi:connected:J-VIT:9379a045-40d0-4114-b2a6-451770aa9ebf`,
+		`tailscale0:tun:connected:tailscale0:uuid-ts`,
+		`p2p-dev-wlan0:wifi-p2p:disconnected::`,
+	}, "\n")
+
+	dev, active := parseWifiDeviceStatus(out)
+	if dev != "wlan0" {
+		t.Errorf("got device %q, want wlan0", dev)
+	}
+	if active.Name != "J-VIT" || active.UUID != "9379a045-40d0-4114-b2a6-451770aa9ebf" || active.Device != "wlan0" {
+		t.Errorf("active connection wrong: %+v", active)
+	}
+
+	// Disconnected wifi device
+	outDisc := "wlan0:wifi:disconnected::\nlo:loopback:connected::\n"
+	dev, active = parseWifiDeviceStatus(outDisc)
+	if dev != "wlan0" {
+		t.Errorf("got device %q, want wlan0", dev)
+	}
+	if active.Name != "" {
+		t.Errorf("expected empty active connection, got %+v", active)
 	}
 }
 

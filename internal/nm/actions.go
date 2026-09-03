@@ -3,45 +3,34 @@ package nm
 import "strings"
 
 func GetStatus() (Status, error) {
-	radioOut, err := run(defaultTimeout, "-t", "radio", "wifi")
+	genOut, err := run(defaultTimeout, "-t", "-f", "STATE,CONNECTIVITY,WIFI", "general", "status")
 	if err != nil {
 		return Status{}, err
 	}
-	genOut, err := run(defaultTimeout, "-t", "-f", "STATE,CONNECTIVITY", "general", "status")
-	if err != nil {
-		return Status{}, err
-	}
-	state, connectivity := parseGeneralStatus(genOut)
+	state, connectivity, wifiEnabled := parseGeneralStatus(genOut)
 	return Status{
-		WifiEnabled:  parseRadioState(radioOut),
+		WifiEnabled:  wifiEnabled,
 		State:        state,
 		Connectivity: connectivity,
 	}, nil
 }
 
 func GetWifiState() (WifiState, error) {
-	devOut, err := run(defaultTimeout, "-t", "-f", "DEVICE,TYPE", "device", "status")
+	devOut, err := run(defaultTimeout, "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION,CON-UUID", "device", "status")
 	if err != nil {
 		return WifiState{}, err
 	}
 
-	st := WifiState{Device: parseWifiDevice(devOut)}
+	dev, active := parseWifiDeviceStatus(devOut)
+	st := WifiState{
+		Device: dev,
+		Active: active,
+	}
 	if st.Device == "" {
 		return st, nil
 	}
 
-	actOut, err := run(defaultTimeout, "-t", "-f", "UUID,TYPE,DEVICE,NAME", "connection", "show", "--active")
-	if err != nil {
-		return st, nil
-	}
-	for _, ac := range parseActiveConnections(actOut) {
-		if ac.Device == st.Device {
-			st.Active = ac
-			break
-		}
-	}
-
-	if st.Active.Device != "" {
+	if st.Active.Name != "" {
 		ipOut, err := run(defaultTimeout, "-t", "-f", "IP4.ADDRESS", "device", "show", st.Device)
 		if err == nil {
 			st.IP = parseDeviceIP(ipOut)

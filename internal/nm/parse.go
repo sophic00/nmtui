@@ -120,7 +120,7 @@ func parseRadioState(out string) bool {
 	return strings.TrimSpace(out) == "enabled"
 }
 
-func parseGeneralStatus(out string) (state, connectivity string) {
+func parseGeneralStatus(out string) (state, connectivity string, wifiEnabled bool) {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -131,9 +131,41 @@ func parseGeneralStatus(out string) (state, connectivity string) {
 		if len(f) > 1 {
 			connectivity = f[1]
 		}
-		return state, connectivity
+		if len(f) > 2 {
+			wifiEnabled = parseRadioState(f[2])
+		}
+		return state, connectivity, wifiEnabled
 	}
-	return "", ""
+	return "", "", false
+}
+
+func parseWifiDeviceStatus(out string) (device string, active ActiveConnection) {
+	var firstDevice string
+	for _, line := range strings.Split(out, "\n") {
+		f := splitTerse(strings.TrimSpace(line))
+		if len(f) >= 2 && f[1] == "wifi" {
+			dev := f[0]
+			if firstDevice == "" {
+				firstDevice = dev
+			}
+			var conName, conUUID string
+			if len(f) >= 4 && f[3] != "" && f[3] != "--" {
+				conName = f[3]
+			}
+			if len(f) >= 5 && f[4] != "" && f[4] != "--" {
+				conUUID = f[4]
+			}
+			if conName != "" {
+				return dev, ActiveConnection{
+					Device: dev,
+					Type:   "802-11-wireless",
+					Name:   conName,
+					UUID:   conUUID,
+				}
+			}
+		}
+	}
+	return firstDevice, ActiveConnection{}
 }
 
 func parseDeviceIP(out string) string {
