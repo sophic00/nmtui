@@ -186,3 +186,35 @@ func TestStartConnectEnterprise(t *testing.T) {
 		t.Errorf("expected 802.1X warning, got %q", mod.warnMsg)
 	}
 }
+
+func TestLayoutAndHelpView(t *testing.T) {
+	m := NewModel()
+	m.width = 100
+	m.height = 30
+	m.layout()
+
+	// Wide screen helpView
+	wideHelp := helpView(100)
+	if !strings.Contains(wideHelp, "rescan") {
+		t.Errorf("expected full description on wide screen, got %q", wideHelp)
+	}
+
+	// Narrow screen helpView
+	narrowHelp := helpView(60)
+	if !strings.Contains(narrowHelp, "scan") {
+		t.Errorf("expected compact description on narrow screen, got %q", narrowHelp)
+	}
+
+	// Dynamic column width test
+	cols := m.table.Columns()
+	var ssidColWidth int
+	for _, c := range cols {
+		if c.Title == "SSID" {
+			ssidColWidth = c.Width
+			break
+		}
+	}
+	if ssidColWidth < 50 {
+		t.Errorf("expected expanded SSID column on width 100, got %d", ssidColWidth)
+	}
+}

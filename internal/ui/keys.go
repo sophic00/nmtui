@@ -26,14 +26,29 @@ var keys = keyMap{
 	Quit:       key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 }
 
-func helpView() string {
+func helpView(width int) string {
 	parts := make([]string, 0, 7)
 	for _, b := range []key.Binding{
 		keys.Connect, keys.Rescan, keys.Toggle, keys.Disconnect,
 		keys.Forget, keys.Filter, keys.Quit,
 	} {
 		h := b.Help()
-		parts = append(parts, dimStyle.Render(h.Key)+" "+h.Desc)
+		desc := h.Desc
+		if width > 0 && width < 80 {
+			switch h.Key {
+			case "enter":
+				desc = "conn"
+			case "r":
+				desc = "scan"
+			case "t":
+				desc = "toggle"
+			case "d":
+				desc = "disc"
+			case "f":
+				desc = "forget"
+			}
+		}
+		parts = append(parts, dimStyle.Render(h.Key)+" "+desc)
 	}
 	return strings.Join(parts, "  ·  ")
 }

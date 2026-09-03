@@ -494,10 +494,35 @@ func (m *Model) layout() {
 	if m.width == 0 {
 		return
 	}
+
+	ssidWidth := m.width - 42
+	if ssidWidth < 16 {
+		ssidWidth = 16
+	} else if ssidWidth > 64 {
+		ssidWidth = 64
+	}
+
+	cols := []table.Column{
+		{Title: "", Width: 2},
+		{Title: "SIGNAL", Width: 6},
+		{Title: "SSID", Width: ssidWidth},
+		{Title: "SECURITY", Width: 16},
+		{Title: "CHAN", Width: 4},
+	}
+	m.table.SetColumns(cols)
+	m.table.SetWidth(m.width)
+
 	reserved := 8
 	if m.filtering {
+		reserved += 2
+	}
+	if m.busy != "" {
+		reserved += 2
+	}
+	if m.errMsg != "" || m.warnMsg != "" || m.info != "" {
 		reserved++
 	}
+
 	h := m.height - reserved
 	if h < 3 {
 		h = 3
@@ -608,7 +633,9 @@ func (m Model) View() string {
 		b.WriteString("\n" + m.spinner.View() + " " + m.busy + "...")
 	}
 
-	b.WriteString("\n\n" + helpView())
+	if m.mode == modeList {
+		b.WriteString("\n\n" + helpView(m.width))
+	}
 	return b.String()
 }
 
