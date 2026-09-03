@@ -45,6 +45,7 @@ type Model struct {
 	confirm       confirmKind
 	busy          string
 	info          string
+	warnMsg       string
 	errMsg        string
 	filtering     bool
 	connectSSID   string
@@ -231,8 +232,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.setErr(msg.err)
 		} else {
-			m.info = msg.info
-			m.errMsg = ""
+			m.setInfo(msg.info)
 		}
 		return m, refreshCmd(msg.rescan)
 
@@ -300,7 +300,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "d":
 		if m.wifi.Active.Name == "" {
-			m.setInfo("no active connection")
+			m.setWarn("no active connection")
 			return m, nil
 		}
 		m.mode = modeConfirm
@@ -308,10 +308,18 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "f":
+		if len(m.visible) == 0 {
+			m.setWarn("no network selected")
+			return m, nil
+		}
 		ap := m.selectedAP()
+		if ap.SSID == "" {
+			m.setWarn("cannot forget: hidden network has no SSID")
+			return m, nil
+		}
 		conn := m.savedFor(ap.SSID)
 		if conn == nil {
-			m.setInfo("no saved profile for " + ap.SSID)
+			m.setWarn("no saved profile for " + ap.SSID)
 			return m, nil
 		}
 		m.mode = modeConfirm
@@ -320,6 +328,10 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
+		if len(m.visible) == 0 {
+			m.setWarn("no network selected")
+			return m, nil
+		}
 		return m.startConnect(m.selectedAP())
 
 	case "/":
@@ -334,11 +346,11 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) startConnect(ap nm.AccessPoint) (tea.Model, tea.Cmd) {
 	if ap.SSID == "" {
-		m.setInfo("cannot connect: hidden network")
+		m.setWarn("cannot connect: hidden network")
 		return m, nil
 	}
 	if ap.InUse {
-		m.setInfo("already connected to " + ap.SSID)
+		m.setWarn("already connected to " + ap.SSID)
 		return m, nil
 	}
 	if m.savedFor(ap.SSID) != nil || nm.IsOpenSecurity(ap.Security) {
@@ -476,12 +488,20 @@ func (m Model) savedFor(ssid string) *nm.SavedConnection {
 
 func (m *Model) setInfo(s string) {
 	m.info = s
+	m.warnMsg = ""
+	m.errMsg = ""
+}
+
+func (m *Model) setWarn(s string) {
+	m.warnMsg = s
+	m.info = ""
 	m.errMsg = ""
 }
 
 func (m *Model) setErr(err error) {
 	m.errMsg = err.Error()
 	m.info = ""
+	m.warnMsg = ""
 }
 
 func (m Model) View() string {
@@ -540,6 +560,8 @@ func (m Model) View() string {
 	switch {
 	case m.errMsg != "":
 		b.WriteString(errStyle.Render("✗ " + m.errMsg))
+	case m.warnMsg != "":
+		b.WriteString(warnStyle.Render("! " + m.warnMsg))
 	case m.info != "":
 		b.WriteString(okStyle.Render("✓ " + m.info))
 	}

@@ -3,6 +3,8 @@ package ui
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"nmtui/internal/nm"
 )
 
@@ -96,5 +98,25 @@ func TestSanitizeSSID(t *testing.T) {
 		if got := sanitizeSSID(tt.in); got != tt.want {
 			t.Errorf("sanitizeSSID(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestEmptyListActions(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.visible = nil
+
+	// Enter on empty list
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+	mod := m2.(Model)
+	if mod.warnMsg != "no network selected" {
+		t.Errorf("enter on empty list: got warnMsg %q, want 'no network selected'", mod.warnMsg)
+	}
+
+	// Forget on empty list
+	m3, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	mod2 := m3.(Model)
+	if mod2.warnMsg != "no network selected" {
+		t.Errorf("forget on empty list: got warnMsg %q, want 'no network selected'", mod2.warnMsg)
 	}
 }
