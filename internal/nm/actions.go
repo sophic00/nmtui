@@ -84,14 +84,21 @@ func ToggleWifi(enable bool) error {
 }
 
 func Connect(ssid, password, device string) error {
-	args := []string{"--wait", connectWait, "device", "wifi", "connect", ssid}
+	var args []string
+	var stdin string
+
+	if password != "" {
+		args = []string{"--ask", "--wait", connectWait, "device", "wifi", "connect", ssid}
+		stdin = password + "\n"
+	} else {
+		args = []string{"--wait", connectWait, "device", "wifi", "connect", ssid}
+	}
+
 	if device != "" {
 		args = append(args, "ifname", device)
 	}
-	if password != "" {
-		args = append(args, "password", password)
-	}
-	_, err := run(connectTimeout, args...)
+
+	_, err := runWithStdin(connectTimeout, stdin, args...)
 	return err
 }
 

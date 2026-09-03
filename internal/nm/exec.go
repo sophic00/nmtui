@@ -17,12 +17,15 @@ const (
 	connectWait    = "45"
 )
 
-func run(timeout time.Duration, args ...string) (string, error) {
+func runWithStdin(timeout time.Duration, stdin string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "nmcli", args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "LC_MESSAGES=C")
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -33,7 +36,14 @@ func run(timeout time.Duration, args ...string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
+		if idx := strings.Index(msg, "Error:"); idx != -1 {
+			msg = strings.TrimSpace(msg[idx:])
+		}
 		return "", fmt.Errorf("%s", msg)
 	}
 	return stdout.String(), nil
+}
+
+func run(timeout time.Duration, args ...string) (string, error) {
+	return runWithStdin(timeout, "", args...)
 }
