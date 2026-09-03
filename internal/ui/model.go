@@ -379,6 +379,10 @@ func (m Model) startConnect(ap nm.AccessPoint) (tea.Model, tea.Cmd) {
 		m.setInfo("")
 		return m, tea.Batch(connectCmd(ap.SSID, "", m.wifi.Device), m.spinner.Tick)
 	}
+	if strings.Contains(ap.Security, "802.1X") {
+		m.setWarn("802.1X enterprise network requires a pre-configured profile")
+		return m, nil
+	}
 	m.mode = modePassword
 	m.connectSSID = ap.SSID
 	m.pwdInput.Reset()

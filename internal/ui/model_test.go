@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -165,5 +166,23 @@ func TestEscClearsFilter(t *testing.T) {
 	}
 	if len(mod.visible) != 2 {
 		t.Errorf("expected 2 visible APs after clearing filter, got %d", len(mod.visible))
+	}
+}
+
+func TestStartConnectEnterprise(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	ap := nm.AccessPoint{
+		SSID:     "eduroam",
+		Security: "WPA2 802.1X",
+	}
+
+	m2, _ := m.startConnect(ap)
+	mod := m2.(Model)
+	if mod.mode == modePassword {
+		t.Error("should not prompt for password on unconfigured 802.1X network")
+	}
+	if !strings.Contains(mod.warnMsg, "802.1X") {
+		t.Errorf("expected 802.1X warning, got %q", mod.warnMsg)
 	}
 }
