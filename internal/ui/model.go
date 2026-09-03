@@ -280,10 +280,6 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	if m.busy != "" {
-		return m, nil
-	}
-
 	switch msg.String() {
 	case "esc":
 		if m.filter.Value() != "" {
@@ -300,6 +296,23 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return m, tea.Quit
 
+	case "/":
+		m.filtering = true
+		return m, m.filter.Focus()
+	}
+
+	if m.busy != "" {
+		// Allow scrolling the table while busy, but block mutating actions
+		switch msg.String() {
+		case "r", "t", "d", "f", "enter":
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.table, cmd = m.table.Update(msg)
+		return m, cmd
+	}
+
+	switch msg.String() {
 	case "r":
 		m.busy = "scanning"
 		m.setInfo("")
@@ -345,10 +358,6 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.startConnect(m.selectedAP())
-
-	case "/":
-		m.filtering = true
-		return m, m.filter.Focus()
 	}
 
 	var cmd tea.Cmd
