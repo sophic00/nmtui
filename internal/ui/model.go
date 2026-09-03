@@ -285,6 +285,18 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "esc":
+		if m.filter.Value() != "" {
+			m.filter.SetValue("")
+			m.applyFilter()
+			m.layout()
+			return m, nil
+		}
+		m.info = ""
+		m.warnMsg = ""
+		m.errMsg = ""
+		return m, nil
+
 	case "q":
 		return m, tea.Quit
 

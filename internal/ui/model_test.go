@@ -144,3 +144,26 @@ func TestEmptyListActions(t *testing.T) {
 		t.Errorf("forget on empty list: got warnMsg %q, want 'no network selected'", mod2.warnMsg)
 	}
 }
+
+func TestEscClearsFilter(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.aps = []nm.AccessPoint{
+		{SSID: "NetA", Signal: 90},
+		{SSID: "NetB", Signal: 80},
+	}
+	m.filter.SetValue("NetA")
+	m.applyFilter()
+	if len(m.visible) != 1 {
+		t.Fatalf("expected 1 filtered AP, got %d", len(m.visible))
+	}
+
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyEsc})
+	mod := m2.(Model)
+	if mod.filter.Value() != "" {
+		t.Errorf("expected filter to be cleared on esc, got %q", mod.filter.Value())
+	}
+	if len(mod.visible) != 2 {
+		t.Errorf("expected 2 visible APs after clearing filter, got %d", len(mod.visible))
+	}
+}
