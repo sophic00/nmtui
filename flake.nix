@@ -16,7 +16,7 @@
         pkgs: withChecks:
         pkgs.buildGo127Module {
           pname = "nmtui";
-          version = "0.1.0";
+          version = "0.2.0";
           src = self;
 
           vendorHash = "sha256-s0Tg4J8PCKIoJ8oA5/QDGRYRfOJ8dVcqLTuMSlDj958=";
