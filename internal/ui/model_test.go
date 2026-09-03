@@ -58,6 +58,30 @@ func TestApplyFilter(t *testing.T) {
 	if len(m.visible) != 0 {
 		t.Errorf("filter with no match: got %d visible, want 0", len(m.visible))
 	}
+
+	// Test cursor retention when list changes
+	m.filter.SetValue("")
+	m.aps = []nm.AccessPoint{
+		{SSID: "NetA", Signal: 90},
+		{SSID: "NetB", Signal: 80},
+		{SSID: "NetC", Signal: 70},
+	}
+	m.applyFilter()
+	m.table.SetCursor(1) // highlighting NetB
+	if m.selectedAP().SSID != "NetB" {
+		t.Fatalf("expected NetB selected, got %q", m.selectedAP().SSID)
+	}
+
+	// Reorder APs (e.g. signal changes)
+	m.aps = []nm.AccessPoint{
+		{SSID: "NetC", Signal: 95},
+		{SSID: "NetA", Signal: 90},
+		{SSID: "NetB", Signal: 80},
+	}
+	m.applyFilter()
+	if m.table.Cursor() != 2 || m.selectedAP().SSID != "NetB" {
+		t.Errorf("cursor should track NetB to index 2, got index %d with SSID %q", m.table.Cursor(), m.selectedAP().SSID)
+	}
 }
 
 func TestSavedFor(t *testing.T) {

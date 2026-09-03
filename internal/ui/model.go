@@ -414,6 +414,11 @@ func (m *Model) setAPs(aps []nm.AccessPoint) {
 }
 
 func (m *Model) applyFilter() {
+	var selectedSSID string
+	if cur := m.table.Cursor(); cur >= 0 && cur < len(m.visible) {
+		selectedSSID = m.visible[cur].SSID
+	}
+
 	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
 	m.visible = make([]nm.AccessPoint, 0, len(m.aps))
 	for _, ap := range m.aps {
@@ -441,6 +446,15 @@ func (m *Model) applyFilter() {
 		})
 	}
 	m.table.SetRows(rows)
+
+	if selectedSSID != "" {
+		for i, ap := range m.visible {
+			if ap.SSID == selectedSSID {
+				m.table.SetCursor(i)
+				return
+			}
+		}
+	}
 
 	if cur := m.table.Cursor(); cur >= len(rows) {
 		if len(rows) == 0 {
