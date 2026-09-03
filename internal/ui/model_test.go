@@ -61,11 +61,15 @@ func TestApplyFilter(t *testing.T) {
 func TestSavedFor(t *testing.T) {
 	m := NewModel()
 	m.saved = []nm.SavedConnection{
-		{Name: "J-VIT", UUID: "uuid-1"},
-		{Name: "cube", UUID: "uuid-2"},
+		{Name: "J-VIT", UUID: "uuid-1", Type: "802-11-wireless"},
+		{Name: "cube", UUID: "uuid-2", Type: "802-11-wireless"},
+		{Name: "vpn-home", UUID: "uuid-3", Type: "tun"},
 	}
 	if m.savedFor("cube") == nil {
 		t.Error("savedFor(cube) should find profile")
+	}
+	if m.savedFor("vpn-home") != nil {
+		t.Error("savedFor(vpn-home) should ignore non-wifi profiles")
 	}
 	if m.savedFor("nope") != nil {
 		t.Error("savedFor(nope) should be nil")

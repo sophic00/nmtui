@@ -69,7 +69,7 @@ func parseSavedConnections(out string) []SavedConnection {
 			continue
 		}
 		f := splitTerse(line)
-		if len(f) < 4 {
+		if len(f) < 4 || f[1] != "802-11-wireless" {
 			continue
 		}
 		conns = append(conns, SavedConnection{

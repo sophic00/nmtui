@@ -466,7 +466,7 @@ func (m Model) savedFor(ssid string) *nm.SavedConnection {
 		return nil
 	}
 	for i := range m.saved {
-		if m.saved[i].Name == ssid {
+		if (m.saved[i].Type == "" || m.saved[i].Type == "802-11-wireless") && m.saved[i].Name == ssid {
 			return &m.saved[i]
 		}
 	}

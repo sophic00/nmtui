@@ -72,8 +72,8 @@ func TestParseSavedConnections(t *testing.T) {
 	}, "\n")
 
 	conns := parseSavedConnections(out)
-	if len(conns) != 3 {
-		t.Fatalf("expected 3 connections, got %d", len(conns))
+	if len(conns) != 2 {
+		t.Fatalf("expected 2 wifi connections (loopback ignored), got %d", len(conns))
 	}
 	if conns[0].Name != "J-VIT" || conns[0].Type != "802-11-wireless" || conns[0].Autoconnect != "yes" {
 		t.Errorf("first connection wrong: %+v", conns[0])
