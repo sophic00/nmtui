@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -85,8 +86,16 @@ func NewModel() Model {
 	}
 }
 
+type pollMsg time.Time
+
+func pollCmd() tea.Cmd {
+	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+		return pollMsg(t)
+	})
+}
+
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(true), m.spinner.Tick)
+	return tea.Batch(refreshCmd(true), m.spinner.Tick, pollCmd())
 }
 
 type stateMsg struct {
@@ -196,6 +205,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case pollMsg:
+		var cmds []tea.Cmd
+		cmds = append(cmds, pollCmd())
+		if m.busy == "" && m.mode == modeList {
+			cmds = append(cmds, stateCmd())
+		}
+		return m, tea.Batch(cmds...)
 
 	case stateMsg:
 		if msg.err != nil {

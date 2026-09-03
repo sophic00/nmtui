@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -216,5 +217,17 @@ func TestLayoutAndHelpView(t *testing.T) {
 	}
 	if ssidColWidth < 50 {
 		t.Errorf("expected expanded SSID column on width 100, got %d", ssidColWidth)
+	}
+}
+
+func TestPollMsg(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.mode = modeList
+
+	// Trigger pollMsg
+	_, cmd := m.Update(pollMsg(time.Now()))
+	if cmd == nil {
+		t.Error("expected batch command scheduled on pollMsg, got nil")
 	}
 }
