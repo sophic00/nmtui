@@ -13,6 +13,8 @@ A terminal UI for managing Wi-Fi with NetworkManager, built with
 - Toggle Wi-Fi radio on/off (`t`)
 - Live status bar: radio state, active connection, and IP address
 - Filter the network list (`/`)
+- Speed test the active connection (`s`): ping + 10s download + 10s upload
+  against Cloudflare, with live progress (stdlib only, no extra dependencies)
 
 ## Requirements
 
@@ -73,6 +75,7 @@ make build            # or: make check (vet + tests), make run, make install
 | `d` | disconnect current network |
 | `f` | forget selected network's saved profile |
 | `/` | filter networks |
+| `s` | speed test active connection |
 | `esc` | clear active filter / dismiss message |
 | `q` / `ctrl+c` | quit |
 
@@ -89,5 +92,6 @@ make build            # or: make check (vet + tests), make run, make install
 ```
 main.go              entry point
 internal/nm/         nmcli wrapper (exec, terse-mode parsing, actions)
+internal/speedtest/  stdlib HTTP speed test (ping + timed download/upload)
 internal/ui/         bubbletea model, keybindings, styles
 ```
