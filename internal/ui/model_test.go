@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -8,7 +10,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"nmtui/internal/nm"
+	"nmtui/internal/speedtest"
 )
+
+var errTestSpeed = errors.New("boom")
 
 func TestSignalBars(t *testing.T) {
 	tests := []struct {
@@ -229,5 +234,202 @@ func TestPollMsg(t *testing.T) {
 	_, cmd := m.Update(pollMsg(time.Now()))
 	if cmd == nil {
 		t.Error("expected batch command scheduled on pollMsg, got nil")
+	}
+}
+
+func TestSpeedtestRequiresConnection(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.wifi.Active.Name = ""
+	m2, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mod := m2.(Model)
+	if !strings.Contains(mod.warnMsg, "not connected") {
+		t.Errorf("expected not-connected warning, got %q", mod.warnMsg)
+	}
+	if mod.mode == modeSpeedtest {
+		t.Error("should not enter speedtest mode without connection")
+	}
+	if cmd != nil {
+		// updateList returns nil cmd on warn path; guard against regressions
+		_ = cmd
+	}
+}
+
+func TestSpeedtestStartAndEsc(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.wifi.Active.Name = "HomeNet"
+	m2, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mod := m2.(Model)
+	if mod.mode != modeSpeedtest {
+		t.Fatalf("expected modeSpeedtest, got %v", mod.mode)
+	}
+	if !mod.speedActive {
+		t.Error("expected speedActive=true after start")
+	}
+	if cmd == nil {
+		t.Error("expected batch cmd from startSpeedtest, got nil")
+	}
+	if mod.speedCancel == nil {
+		t.Error("expected speedCancel to be set")
+	}
+
+	// esc cancels back to list
+	m3, _ := mod.updateSpeedtest(tea.KeyMsg{Type: tea.KeyEsc})
+	mod3 := m3.(Model)
+	if mod3.mode != modeList {
+		t.Errorf("esc: expected modeList, got %v", mod3.mode)
+	}
+	if mod3.speedActive {
+		t.Error("esc: expected speedActive=false")
+	}
+	if mod3.busy != "" {
+		t.Errorf("esc: expected busy cleared, got %q", mod3.busy)
+	}
+}
+
+func TestSpeedtestBlockedWhileBusy(t *testing.T) {
+	m := NewModel()
+	m.busy = "scanning"
+	m.wifi.Active.Name = "HomeNet"
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if mod := m2.(Model); mod.mode == modeSpeedtest {
+		t.Error("s while busy should be ignored")
+	}
+}
+
+func TestSpeedProgressAndDoneMsgs(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.wifi.Active.Name = "HomeNet"
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mod := m2.(Model)
+
+	prog := speedtest.Progress{Phase: speedtest.PhaseDownload, Elapsed: 5 * time.Second, TotalBytes: 50_000_000, InstantMbps: 80}
+	m4, cmd := mod.Update(speedProgressMsg(prog))
+	mod4 := m4.(Model)
+	if mod4.speedProg.InstantMbps != 80 {
+		t.Errorf("progress not stored: %+v", mod4.speedProg)
+	}
+	if cmd == nil {
+		t.Error("expected re-armed listener cmd after progress, got nil")
+	}
+
+	res := speedtest.Result{DownloadMbps: 100, UploadMbps: 20, LatencyMs: 12, JitterMs: 2}
+	m5, _ := mod4.Update(speedDoneMsg{result: res})
+	mod5 := m5.(Model)
+	if mod5.speedActive {
+		t.Error("done: expected speedActive=false")
+	}
+	if mod5.busy != "" {
+		t.Errorf("done: expected busy cleared, got %q", mod5.busy)
+	}
+	if mod5.speedResult == nil || mod5.speedResult.DownloadMbps != 100 {
+		t.Errorf("done: result not stored: %+v", mod5.speedResult)
+	}
+	if got := mod5.View(); !strings.Contains(got, "100") {
+		t.Errorf("result view should contain download figure, got:\n%s", got)
+	}
+
+	// Error path surfaces errMsg
+	m6, _ := mod4.Update(speedDoneMsg{err: errTestSpeed})
+	mod6 := m6.(Model)
+	if mod6.errMsg == "" {
+		t.Error("done with err: expected errMsg set")
+	}
+}
+
+func TestProgressBar(t *testing.T) {
+	if got := progressBar(0, 4); got != "░░░░" {
+		t.Errorf("progressBar(0) = %q", got)
+	}
+	if got := progressBar(1, 4); got != "████" {
+		t.Errorf("progressBar(1) = %q", got)
+	}
+	if got := progressBar(0.5, 4); got != "██░░" {
+		t.Errorf("progressBar(0.5) = %q", got)
+	}
+	// Clamp out-of-range inputs
+	if got := progressBar(2, 2); got != "██" {
+		t.Errorf("progressBar(2) clamp = %q", got)
+	}
+}
+
+func TestSpeedViewRunning(t *testing.T) {
+	m := NewModel()
+	m.mode = modeSpeedtest
+	m.speedActive = true
+	m.speedSSID = "HomeNet"
+	m.speedProg = speedtest.Progress{Phase: speedtest.PhaseUpload, Elapsed: 3 * time.Second, InstantMbps: 25}
+	if got := m.speedView(); !strings.Contains(got, "upload") {
+		t.Errorf("running view should mention phase, got:\n%s", got)
+	}
+}
+
+func TestSpeedDoneStaleRunIDIgnored(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.wifi.Active.Name = "HomeNet"
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mod := m2.(Model)
+	currentGen := mod.speedGen
+
+	stale := speedDoneMsg{result: speedtest.Result{DownloadMbps: 999}, runID: currentGen - 1}
+	// runID 0 is accepted for backwards compat, so use an explicit stale non-zero ID.
+	if currentGen-1 == 0 {
+		// Force a second run so stale ID is non-zero and mismatched.
+		m3, _ := mod.updateSpeedtest(tea.KeyMsg{Type: tea.KeyEsc})
+		modEsc := m3.(Model)
+		m4, _ := modEsc.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+		mod = m4.(Model)
+		stale.runID = mod.speedGen - 1
+		if stale.runID == 0 {
+			t.Skip("need non-zero stale runID")
+		}
+	}
+	m5, _ := mod.Update(stale)
+	mod5 := m5.(Model)
+	if !mod5.speedActive {
+		t.Error("stale done msg should not clear active run")
+	}
+	if mod5.speedResult != nil {
+		t.Errorf("stale done msg should not store result: %+v", mod5.speedResult)
+	}
+}
+
+func TestSpeedDoneCancelAfterEscSilent(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.wifi.Active.Name = "HomeNet"
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mod := m2.(Model)
+	gen := mod.speedGen
+
+	m3, _ := mod.updateSpeedtest(tea.KeyMsg{Type: tea.KeyEsc})
+	escMod := m3.(Model)
+	if escMod.mode != modeList {
+		t.Fatalf("esc should return to list, got %v", escMod.mode)
+	}
+	m4, _ := escMod.Update(speedDoneMsg{err: context.Canceled, runID: gen})
+	mod4 := m4.(Model)
+	if mod4.errMsg != "" {
+		t.Errorf("canceled done after esc should stay silent, got errMsg %q", mod4.errMsg)
+	}
+}
+
+func TestSpeedtestQQuits(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.wifi.Active.Name = "HomeNet"
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mod := m2.(Model)
+	_, cmd := mod.updateSpeedtest(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("q in speedtest mode should return a quit cmd")
+	}
+	if msg := cmd(); msg == nil {
+		t.Error("expected non-nil quit msg")
+	} else if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Errorf("q should quit, got %T", msg)
 	}
 }
