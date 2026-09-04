@@ -17,9 +17,10 @@ const (
 	PhaseUpload   = "upload"
 )
 
-// downloadBytesPerRequest sizes a single GET so a 10s phase on a fast link
-// rarely hits EOF mid-phase (workers re-request on EOF anyway).
-const downloadBytesPerRequest = 200_000_000
+// downloadBytesPerRequest sizes a single GET. Cloudflare rejects large
+// values (100MB+ returns 403), so stay at the 25MB size its own speed
+// test uses; workers re-request on EOF anyway.
+const downloadBytesPerRequest = 25_000_000
 
 // uploadBytesPerRequest sizes a single POST body; workers re-POST on completion.
 const uploadBytesPerRequest = 200_000_000
@@ -225,6 +226,8 @@ func runDownload(ctx context.Context, client *http.Client, cfg Config, report fu
 	defer windowCancel()
 
 	var total atomic.Int64
+	var failures atomic.Int64
+	var lastStatus atomic.Int64
 	var wg sync.WaitGroup
 	for i := 0; i < cfg.Streams; i++ {
 		wg.Add(1)
@@ -248,7 +251,24 @@ func runDownload(ctx context.Context, client *http.Client, cfg Config, report fu
 					if windowCtx.Err() != nil || phaseCtx.Err() != nil || ctx.Err() != nil {
 						return
 					}
+					failures.Add(1)
 					// Transient error: brief backoff, then retry within window.
+					select {
+					case <-windowCtx.Done():
+						return
+					case <-time.After(200 * time.Millisecond):
+						continue
+					}
+				}
+				if resp.StatusCode >= 400 {
+					status := resp.StatusCode
+					_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 256))
+					_ = resp.Body.Close()
+					if windowCtx.Err() != nil || phaseCtx.Err() != nil || ctx.Err() != nil {
+						return
+					}
+					failures.Add(1)
+					lastStatus.Store(int64(status))
 					select {
 					case <-windowCtx.Done():
 						return
@@ -303,6 +323,12 @@ loop:
 		return 0, err
 	}
 	n := total.Load()
+	if n == 0 && failures.Load() > 0 {
+		if code := lastStatus.Load(); code != 0 {
+			return 0, fmt.Errorf("download: server returned HTTP %d", code)
+		}
+		return 0, fmt.Errorf("download: no data received (%d failed requests)", failures.Load())
+	}
 	if report != nil {
 		report(Progress{Phase: PhaseDownload, Elapsed: elapsed, TotalBytes: n, InstantMbps: Mbps(n, elapsed)})
 	}
@@ -314,6 +340,8 @@ func runUpload(ctx context.Context, client *http.Client, cfg Config, report func
 	defer windowCancel()
 
 	var total atomic.Int64
+	var failures atomic.Int64
+	var lastStatus atomic.Int64
 	var wg sync.WaitGroup
 	for i := 0; i < cfg.Streams; i++ {
 		wg.Add(1)
@@ -339,6 +367,23 @@ func runUpload(ctx context.Context, client *http.Client, cfg Config, report func
 					if windowCtx.Err() != nil || ctx.Err() != nil {
 						return
 					}
+					failures.Add(1)
+					select {
+					case <-windowCtx.Done():
+						return
+					case <-time.After(200 * time.Millisecond):
+						continue
+					}
+				}
+				if resp.StatusCode >= 400 {
+					status := resp.StatusCode
+					_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 256))
+					_ = resp.Body.Close()
+					if windowCtx.Err() != nil || ctx.Err() != nil {
+						return
+					}
+					failures.Add(1)
+					lastStatus.Store(int64(status))
 					select {
 					case <-windowCtx.Done():
 						return
@@ -391,6 +436,12 @@ loop:
 		return 0, err
 	}
 	n := total.Load()
+	if n == 0 && failures.Load() > 0 {
+		if code := lastStatus.Load(); code != 0 {
+			return 0, fmt.Errorf("upload: server returned HTTP %d", code)
+		}
+		return 0, fmt.Errorf("upload: no data received (%d failed requests)", failures.Load())
+	}
 	if report != nil {
 		report(Progress{Phase: PhaseUpload, Elapsed: elapsed, TotalBytes: n, InstantMbps: Mbps(n, elapsed)})
 	}
