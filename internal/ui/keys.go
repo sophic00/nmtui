@@ -13,6 +13,7 @@ type keyMap struct {
 	Disconnect key.Binding
 	Forget     key.Binding
 	Filter     key.Binding
+	Speedtest  key.Binding
 	Quit       key.Binding
 }
 
@@ -23,14 +24,15 @@ var keys = keyMap{
 	Disconnect: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "disconnect")),
 	Forget:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "forget saved")),
 	Filter:     key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+	Speedtest:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "speedtest")),
 	Quit:       key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 }
 
 func helpView(width int) string {
-	parts := make([]string, 0, 7)
+	parts := make([]string, 0, 8)
 	for _, b := range []key.Binding{
 		keys.Connect, keys.Rescan, keys.Toggle, keys.Disconnect,
-		keys.Forget, keys.Filter, keys.Quit,
+		keys.Forget, keys.Filter, keys.Speedtest, keys.Quit,
 	} {
 		h := b.Help()
 		desc := h.Desc
@@ -46,6 +48,8 @@ func helpView(width int) string {
 				desc = "disc"
 			case "f":
 				desc = "forget"
+			case "s":
+				desc = "test"
 			}
 		}
 		parts = append(parts, dimStyle.Render(h.Key)+" "+desc)

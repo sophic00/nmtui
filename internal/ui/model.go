@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"nmtui/internal/nm"
+	"nmtui/internal/speedtest"
 )
 
 type mode int
@@ -20,6 +23,7 @@ const (
 	modeList mode = iota
 	modePassword
 	modeConfirm
+	modeSpeedtest
 )
 
 type confirmKind int
@@ -54,6 +58,15 @@ type Model struct {
 	ifaceOverride string
 	width         int
 	height        int
+
+	speedResult *speedtest.Result
+	speedProg   speedtest.Progress
+	speedActive bool
+	speedSSID   string
+	speedCh     chan speedtest.Progress
+	speedCtx    context.Context
+	speedCancel context.CancelFunc
+	speedGen    int
 }
 
 func NewModelWithDevice(device string) Model {
@@ -200,6 +213,71 @@ func forgetCmd(id, name string) tea.Cmd {
 	}
 }
 
+type speedProgressMsg speedtest.Progress
+
+type speedDoneMsg struct {
+	result speedtest.Result
+	err    error
+	runID  int
+}
+
+// startSpeedtest enters speedtest mode and launches the time-based
+// download/upload run plus a progress listener. Caller must have checked
+// connection state and busy flag.
+func (m *Model) startSpeedtest() tea.Cmd {
+	if m.speedCancel != nil {
+		m.speedCancel()
+		m.speedCancel = nil
+	}
+	// 10s down + 10s up + ping overhead; give workers grace to exit.
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	m.speedCtx = ctx
+	m.speedCancel = cancel
+	m.speedGen++
+	runID := m.speedGen
+	m.mode = modeSpeedtest
+	m.speedActive = true
+	m.speedResult = nil
+	m.speedProg = speedtest.Progress{}
+	m.speedSSID = m.wifi.Active.Name
+	m.speedCh = make(chan speedtest.Progress, 32)
+	m.busy = "speed testing"
+	m.setInfo("")
+	ch := m.speedCh
+
+	runCmd := func() tea.Msg {
+		cfg := speedtest.DefaultConfig()
+		res, err := speedtest.Run(ctx, cfg, func(p speedtest.Progress) {
+			select {
+			case ch <- p:
+			case <-ctx.Done():
+			default:
+				// Drop ticks if the UI is behind rather than blocking workers.
+				select {
+				case ch <- p:
+				default:
+				}
+			}
+		})
+		return speedDoneMsg{result: res, err: err, runID: runID}
+	}
+	return tea.Batch(runCmd, listenSpeedCmd(ctx, ch), m.spinner.Tick)
+}
+
+func listenSpeedCmd(ctx context.Context, ch chan speedtest.Progress) tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case p, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			return speedProgressMsg(p)
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -218,7 +296,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pollMsg:
 		var cmds []tea.Cmd
 		cmds = append(cmds, pollCmd())
-		if m.busy == "" && m.mode == modeList {
+		if m.busy == "" && m.mode == modeList && !m.speedActive {
 			cmds = append(cmds, m.stateCmd())
 		}
 		return m, tea.Batch(cmds...)
@@ -262,6 +340,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refreshCmd(msg.rescan)
 
+	case speedProgressMsg:
+		m.speedProg = speedtest.Progress(msg)
+		if m.speedActive && m.speedCh != nil && m.speedCtx != nil {
+			return m, listenSpeedCmd(m.speedCtx, m.speedCh)
+		}
+		return m, nil
+
+	case speedDoneMsg:
+		// Drop stale results from a previous run (e.g. esc then quick re-run).
+		if msg.runID != 0 && msg.runID != m.speedGen {
+			return m, nil
+		}
+		m.speedActive = false
+		m.busy = ""
+		if m.speedCancel != nil {
+			m.speedCancel()
+			m.speedCancel = nil
+		}
+		m.speedCtx = nil
+		if msg.err != nil {
+			// User cancelled via esc: mode already back to list, stay silent.
+			if errors.Is(msg.err, context.Canceled) && m.mode != modeSpeedtest {
+				return m, nil
+			}
+			m.setErr(msg.err)
+			return m, nil
+		}
+		m.speedResult = &msg.result
+		m.setInfo("")
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -270,6 +379,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
+		if m.speedCancel != nil {
+			m.speedCancel()
+			m.speedCancel = nil
+		}
+		m.speedCtx = nil
+		m.speedActive = false
 		return m, tea.Quit
 	}
 
@@ -278,6 +393,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updatePassword(msg)
 	case modeConfirm:
 		return m.updateConfirm(msg)
+	case modeSpeedtest:
+		return m.updateSpeedtest(msg)
 	default:
 		return m.updateList(msg)
 	}
@@ -330,7 +447,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.busy != "" {
 		// Allow scrolling the table while busy, but block mutating actions
 		switch msg.String() {
-		case "r", "t", "d", "f", "enter":
+		case "r", "t", "d", "f", "s", "enter":
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -384,6 +501,13 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.startConnect(m.selectedAP())
+
+	case "s":
+		if m.wifi.Active.Name == "" {
+			m.setWarn("not connected — join a network first")
+			return m, nil
+		}
+		return m, m.startSpeedtest()
 	}
 
 	var cmd tea.Cmd
@@ -455,6 +579,40 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		m.confirm = confirmNone
 		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) updateSpeedtest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		if m.speedCancel != nil {
+			m.speedCancel()
+			m.speedCancel = nil
+		}
+		m.speedCtx = nil
+		m.speedActive = false
+		m.busy = ""
+		m.mode = modeList
+		return m, nil
+	case "q":
+		if m.speedCancel != nil {
+			m.speedCancel()
+			m.speedCancel = nil
+		}
+		m.speedCtx = nil
+		m.speedActive = false
+		return m, tea.Quit
+	case "r":
+		if m.speedActive {
+			return m, nil
+		}
+		if m.wifi.Active.Name == "" {
+			m.setWarn("not connected — join a network first")
+			m.mode = modeList
+			return m, nil
+		}
+		return m, m.startSpeedtest()
 	}
 	return m, nil
 }
@@ -632,6 +790,9 @@ func (m Model) View() string {
 		body := q + "\n\n" + dimStyle.Render("y: yes  ·  n/esc: no")
 		b.WriteString(boxStyle.Render(body))
 
+	case modeSpeedtest:
+		b.WriteString(m.speedView())
+
 	default:
 		switch {
 		case !m.status.WifiEnabled:
@@ -655,7 +816,7 @@ func (m Model) View() string {
 	case m.info != "":
 		b.WriteString(okStyle.Render("✓ " + m.info))
 	}
-	if m.busy != "" {
+	if m.busy != "" && m.mode != modeSpeedtest {
 		b.WriteString("\n" + m.spinner.View() + " " + m.busy + "...")
 	}
 
@@ -704,6 +865,101 @@ func sanitizeSSID(s string) string {
 			b.WriteRune('?')
 		} else {
 			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func (m Model) speedView() string {
+	ssid := sanitizeSSID(m.speedSSID)
+	if ssid == "" {
+		ssid = sanitizeSSID(m.wifi.Active.Name)
+	}
+	if ssid == "" {
+		ssid = "(unknown)"
+	}
+	cfg := speedtest.DefaultConfig()
+	title := "Speed test — " + boldStyle.Render(ssid)
+	sub := dimStyle.Render("server: "+cfg.BaseURL+"  ·  10s down + 10s up (4 streams)")
+	var body strings.Builder
+	body.WriteString(title + "\n" + sub + "\n\n")
+
+	if m.speedResult != nil {
+		r := m.speedResult
+		fmt.Fprintf(&body, "  ↓ %s\n", okStyle.Render(speedtest.FormatMbps(r.DownloadMbps)+" down"))
+		fmt.Fprintf(&body, "  ↑ %s\n", okStyle.Render(speedtest.FormatMbps(r.UploadMbps)+" up"))
+		fmt.Fprintf(&body, "  ping %.0f ms", r.LatencyMs)
+		if r.JitterMs > 0 {
+			fmt.Fprintf(&body, "  ·  jitter %.1f ms", r.JitterMs)
+		}
+		body.WriteString("\n\n" + dimStyle.Render("r: re-run  ·  esc: close"))
+		return boxStyle.Render(body.String())
+	}
+
+	if m.errMsg != "" {
+		// Error is rendered below the box by View; keep panel contextual.
+		body.WriteString(dimStyle.Render("test failed — see error below") + "\n\n")
+		body.WriteString(dimStyle.Render("r: retry  ·  esc: close"))
+		return boxStyle.Render(body.String())
+	}
+
+	if !m.speedActive {
+		body.WriteString(dimStyle.Render("preparing…") + "\n\n")
+		body.WriteString(dimStyle.Render("esc: cancel"))
+		return boxStyle.Render(body.String())
+	}
+
+	phase := m.speedProg.Phase
+	if phase == "" {
+		body.WriteString(m.spinner.View() + " measuring ping…\n\n")
+		body.WriteString(dimStyle.Render("~20s total · esc: cancel"))
+		return boxStyle.Render(body.String())
+	}
+	var expected time.Duration
+	var label string
+	switch phase {
+	case speedtest.PhaseDownload:
+		expected, label = cfg.DownloadFor, "download"
+	case speedtest.PhaseUpload:
+		expected, label = cfg.UploadFor, "upload"
+	default:
+		expected, label = cfg.DownloadFor, phase
+	}
+	pct := 0.0
+	if expected > 0 {
+		pct = float64(m.speedProg.Elapsed) / float64(expected)
+		if pct < 0 {
+			pct = 0
+		}
+		if pct > 1 {
+			pct = 1
+		}
+	}
+	fmt.Fprintf(&body, "%s %s  ·  %s\n", m.spinner.View(), label,
+		boldStyle.Render(speedtest.FormatMbps(m.speedProg.InstantMbps)))
+	body.WriteString("  " + progressBar(pct, 30) + "\n")
+	fmt.Fprintf(&body, "  %s\n\n", dimStyle.Render(fmt.Sprintf("%.0fs / %.0fs", m.speedProg.Elapsed.Seconds(), expected.Seconds())))
+	body.WriteString(dimStyle.Render("esc: cancel"))
+	return boxStyle.Render(body.String())
+}
+
+func progressBar(pct float64, width int) string {
+	if width <= 0 {
+		width = 20
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 1 {
+		pct = 1
+	}
+	filled := int(pct*float64(width) + 0.5)
+	var b strings.Builder
+	for i := 0; i < width; i++ {
+		if i < filled {
+			b.WriteString("█")
+		} else {
+			b.WriteString("░")
 		}
 	}
 	return b.String()
