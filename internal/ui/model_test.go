@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"nmtui/internal/nm"
 	"nmtui/internal/speedtest"
@@ -417,6 +418,60 @@ func TestSpeedBarWidthScales(t *testing.T) {
 	m.width = 30
 	if got := m.speedBarWidth(); got != 10 {
 		t.Errorf("tiny bar = %d, want floored 10", got)
+	}
+}
+
+func TestHelpViewFitsWidth(t *testing.T) {
+	// The help bar must wrap instead of overflowing: bubbletea truncates
+	// lines wider than the terminal, which used to cut off the last keys.
+	for _, width := range []int{40, 50, 60, 68, 72, 80, 100, 140} {
+		lines := helpLines(width)
+		if len(lines) == 0 {
+			t.Fatalf("width %d: no help lines", width)
+		}
+		for i, line := range lines {
+			if w := lipgloss.Width(line); w > width {
+				t.Errorf("width %d: help line %d is %d cells wide: %q", width, i, w, line)
+			}
+		}
+	}
+	// Wide terminals keep the full one-line bar with full descriptions.
+	wide := helpLines(140)
+	if len(wide) != 1 {
+		t.Errorf("width 140: expected 1 help line, got %d: %q", len(wide), wide)
+	}
+	if !strings.Contains(wide[0], "speedtest") {
+		t.Errorf("width 140: expected full descriptions, got %q", wide[0])
+	}
+	// All bindings survive the wrap at every width.
+	for _, width := range []int{40, 50, 68, 80} {
+		joined := ""
+		for _, line := range helpLines(width) {
+			joined += line
+		}
+		for _, keyName := range []string{"enter", "r", "t", "d", "f", "/", "s", "q"} {
+			if !strings.Contains(joined, keyName) {
+				t.Errorf("width %d: key %q missing from wrapped help", width, keyName)
+			}
+		}
+	}
+}
+
+func TestLayoutReservesWrappedHelpLines(t *testing.T) {
+	m := NewModel()
+	m.width = 50
+	m.height = 24
+	m.busy = ""
+	m.layout()
+	h1 := m.table.Height()
+
+	// At a width where the help bar wraps to 2 lines, the table must be
+	// shorter than at a width where it fits on one line.
+	m.width = 140
+	m.layout()
+	h2 := m.table.Height()
+	if h2 <= h1 {
+		t.Errorf("expected table height to account for wrapped help: narrow=%d wide=%d", h1, h2)
 	}
 }
 
