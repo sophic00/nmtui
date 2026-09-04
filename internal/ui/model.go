@@ -706,6 +706,8 @@ func (m *Model) layout() {
 	if m.errMsg != "" || m.warnMsg != "" || m.info != "" {
 		reserved++
 	}
+	// The help bar may wrap to multiple lines on narrow terminals.
+	reserved += len(helpLines(m.width)) - 1
 
 	h := m.height - reserved
 	if h < 3 {

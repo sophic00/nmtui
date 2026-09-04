@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type keyMap struct {
@@ -28,7 +29,9 @@ var keys = keyMap{
 	Quit:       key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 }
 
-func helpView(width int) string {
+// helpParts renders the key/desc segments, using compact descriptions when
+// the terminal is narrow.
+func helpParts(width int) []string {
 	parts := make([]string, 0, 8)
 	for _, b := range []key.Binding{
 		keys.Connect, keys.Rescan, keys.Toggle, keys.Disconnect,
@@ -43,7 +46,7 @@ func helpView(width int) string {
 			case "r":
 				desc = "scan"
 			case "t":
-				desc = "toggle"
+				desc = "on/off"
 			case "d":
 				desc = "disc"
 			case "f":
@@ -54,5 +57,40 @@ func helpView(width int) string {
 		}
 		parts = append(parts, dimStyle.Render(h.Key)+" "+desc)
 	}
-	return strings.Join(parts, "  ·  ")
+	return parts
+}
+
+// helpLines packs the help segments into as few lines as fit within width.
+// The bubbletea renderer truncates overflowing lines, so a fixed one-line
+// help bar would be cut off on narrow terminals; instead we wrap.
+func helpLines(width int) []string {
+	parts := helpParts(width)
+	sep := "  ·  "
+	if width <= 0 {
+		return []string{strings.Join(parts, sep)}
+	}
+	lines := make([]string, 0, 2)
+	cur := ""
+	for _, p := range parts {
+		cand := p
+		if cur != "" {
+			cand = cur + sep + p
+		}
+		if lipgloss.Width(cand) <= width {
+			cur = cand
+		} else {
+			if cur != "" {
+				lines = append(lines, cur)
+			}
+			cur = p
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return lines
+}
+
+func helpView(width int) string {
+	return strings.Join(helpLines(width), "\n")
 }
