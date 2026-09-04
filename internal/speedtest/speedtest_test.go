@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -154,5 +155,77 @@ func TestRunBadServerFailsFast(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Errorf("bad server did not fail fast: %v", elapsed)
+	}
+}
+
+func TestDownloadRequestSizeAllowed(t *testing.T) {
+	// Regression test: Cloudflare rejects oversized __down requests with
+	// 403 (e.g. bytes=200000000), which used to surface as 0.00 Mbps.
+	// The built-in chunk size must stay under the server cap.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/__up" {
+			_, _ = io.Copy(io.Discard, r.Body)
+			_ = r.Body.Close()
+			return
+		}
+		if r.URL.Path == "/__down" && (r.URL.Query().Get("bytes") == fmt.Sprint(downloadBytesPerRequest) || r.URL.Query().Get("bytes") == "0") {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(make([]byte, 32*1024))
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintln(w, "error code: 1015")
+	}))
+	defer srv.Close()
+
+	cfg := Config{
+		DownloadFor: 1500 * time.Millisecond,
+		UploadFor:   200 * time.Millisecond,
+		Streams:     1,
+		BaseURL:     srv.URL,
+		PingSamples: 1,
+		Client:      srv.Client(),
+	}
+	res, err := Run(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatalf("Run with allowed chunk size: %v", err)
+	}
+	if res.DownloadMbps <= 0 {
+		t.Errorf("DownloadMbps = %v, want > 0 (chunk size %d must be accepted)", res.DownloadMbps, downloadBytesPerRequest)
+	}
+}
+
+func TestDownloadForbiddenSurfacesError(t *testing.T) {
+	// If every download request is rejected, Run must return an error
+	// naming the status instead of a silent 0.00 Mbps result.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/__down", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("bytes") == "0" {
+			return // ping probe: 200 with empty body
+		}
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintln(w, "error code: 1015")
+	})
+	mux.HandleFunc("/__up", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = r.Body.Close()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := Config{
+		DownloadFor: 1200 * time.Millisecond,
+		UploadFor:   200 * time.Millisecond,
+		Streams:     1,
+		BaseURL:     srv.URL,
+		PingSamples: 1,
+		Client:      srv.Client(),
+	}
+	_, err := Run(context.Background(), cfg, nil)
+	if err == nil {
+		t.Fatal("expected error when downloads are all rejected, got nil result")
+	}
+	if got := err.Error(); !strings.Contains(got, "403") {
+		t.Errorf("error should name the HTTP status, got %q", got)
 	}
 }

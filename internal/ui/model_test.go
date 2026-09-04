@@ -366,6 +366,60 @@ func TestSpeedViewRunning(t *testing.T) {
 	}
 }
 
+func TestResizeUpdatesTable(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mod := m2.(Model)
+	if mod.width != 100 || mod.height != 30 {
+		t.Fatalf("size not stored: %dx%d", mod.width, mod.height)
+	}
+	w1, h1 := mod.table.Width(), mod.table.Height()
+	m3, _ := mod.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	mod3 := m3.(Model)
+	w2, h2 := mod3.table.Width(), mod3.table.Height()
+	if w2 == w1 && h2 == h1 {
+		t.Errorf("table dims unchanged after resize: still %dx%d", w1, h1)
+	}
+	if w2 != 60 {
+		t.Errorf("table width = %d after resize to 60, want 60", w2)
+	}
+	if h2 >= h1 {
+		t.Errorf("table height should shrink 30->20 rows: %d -> %d", h1, h2)
+	}
+	// SSID column follows width.
+	ssidWidth := func(mm Model) int {
+		for _, c := range mm.table.Columns() {
+			if c.Title == "SSID" {
+				return c.Width
+			}
+		}
+		return -1
+	}
+	if ssidWidth(mod3) >= ssidWidth(mod) {
+		t.Errorf("SSID column should shrink on resize: %d -> %d", ssidWidth(mod), ssidWidth(mod3))
+	}
+}
+
+func TestSpeedBarWidthScales(t *testing.T) {
+	m := NewModel()
+	if got := m.speedBarWidth(); got != 30 {
+		t.Errorf("zero width fallback = %d, want 30", got)
+	}
+	m.width = 140
+	if got := m.speedBarWidth(); got != 50 {
+		t.Errorf("wide bar = %d, want capped 50", got)
+	}
+	m.width = 50
+	if got := m.speedBarWidth(); got != 26 {
+		t.Errorf("narrow bar = %d, want 26", got)
+	}
+	m.width = 30
+	if got := m.speedBarWidth(); got != 10 {
+		t.Errorf("tiny bar = %d, want floored 10", got)
+	}
+}
+
 func TestSpeedDoneStaleRunIDIgnored(t *testing.T) {
 	m := NewModel()
 	m.busy = ""
