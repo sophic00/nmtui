@@ -937,10 +937,26 @@ func (m Model) speedView() string {
 	}
 	fmt.Fprintf(&body, "%s %s  ·  %s\n", m.spinner.View(), label,
 		boldStyle.Render(speedtest.FormatMbps(m.speedProg.InstantMbps)))
-	body.WriteString("  " + progressBar(pct, 30) + "\n")
+	body.WriteString("  " + progressBar(pct, m.speedBarWidth()) + "\n")
 	fmt.Fprintf(&body, "  %s\n\n", dimStyle.Render(fmt.Sprintf("%.0fs / %.0fs", m.speedProg.Elapsed.Seconds(), expected.Seconds())))
 	body.WriteString(dimStyle.Render("esc: cancel"))
 	return boxStyle.Render(body.String())
+}
+
+func (m Model) speedBarWidth() int {
+	// Scale the progress bar with terminal width so the panel visibly
+	// adapts on resize; fall back to 30 before the first WindowSizeMsg.
+	if m.width <= 0 {
+		return 30
+	}
+	w := m.width - 24
+	if w < 10 {
+		return 10
+	}
+	if w > 50 {
+		return 50
+	}
+	return w
 }
 
 func progressBar(pct float64, width int) string {
