@@ -29,8 +29,9 @@ var keys = keyMap{
 	Quit:       key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 }
 
-// helpParts renders the key/desc segments, using compact descriptions when
-// the terminal is narrow.
+// helpParts renders the key/desc segments with full descriptions. Fitting
+// is handled by helpLines, which wraps to the terminal width, so no
+// abbreviated labels are needed.
 func helpParts(width int) []string {
 	parts := make([]string, 0, 8)
 	for _, b := range []key.Binding{
@@ -38,24 +39,7 @@ func helpParts(width int) []string {
 		keys.Forget, keys.Filter, keys.Speedtest, keys.Quit,
 	} {
 		h := b.Help()
-		desc := h.Desc
-		if width > 0 && width < 80 {
-			switch h.Key {
-			case "enter":
-				desc = "conn"
-			case "r":
-				desc = "scan"
-			case "t":
-				desc = "on/off"
-			case "d":
-				desc = "disc"
-			case "f":
-				desc = "forget"
-			case "s":
-				desc = "test"
-			}
-		}
-		parts = append(parts, dimStyle.Render(h.Key)+" "+desc)
+		parts = append(parts, dimStyle.Render(h.Key)+" "+h.Desc)
 	}
 	return parts
 }

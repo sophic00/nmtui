@@ -206,10 +206,13 @@ func TestLayoutAndHelpView(t *testing.T) {
 		t.Errorf("expected full description on wide screen, got %q", wideHelp)
 	}
 
-	// Narrow screen helpView
+	// Narrow screen helpView keeps full descriptions (wrapped, not cut).
 	narrowHelp := helpView(60)
-	if !strings.Contains(narrowHelp, "scan") {
-		t.Errorf("expected compact description on narrow screen, got %q", narrowHelp)
+	if !strings.Contains(narrowHelp, "connect") {
+		t.Errorf("expected full 'connect' description on narrow screen, got %q", narrowHelp)
+	}
+	if strings.Contains(narrowHelp, "conn ") || strings.Contains(narrowHelp, " conn\n") {
+		t.Errorf("expected no abbreviated 'conn' label, got %q", narrowHelp)
 	}
 
 	// Dynamic column width test
@@ -442,6 +445,19 @@ func TestHelpViewFitsWidth(t *testing.T) {
 	}
 	if !strings.Contains(wide[0], "speedtest") {
 		t.Errorf("width 140: expected full descriptions, got %q", wide[0])
+	}
+	// Full words are never abbreviated, even on narrow terminals where
+	// the bar wraps instead.
+	for _, width := range []int{50, 68, 79} {
+		joined := ""
+		for _, line := range helpLines(width) {
+			joined += line + "\n"
+		}
+		for _, desc := range []string{"connect", "rescan", "disconnect", "forget saved", "speedtest"} {
+			if !strings.Contains(joined, desc) {
+				t.Errorf("width %d: full description %q missing from wrapped help", width, desc)
+			}
+		}
 	}
 	// All bindings survive the wrap at every width.
 	for _, width := range []int{40, 50, 68, 80} {
