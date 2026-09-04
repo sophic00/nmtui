@@ -1,6 +1,6 @@
 pkgbase = nmt
 	pkgdesc = Terminal UI for managing Wi-Fi with NetworkManager
-	pkgver = 0.3.0
+	pkgver = 0.3.1
 	pkgrel = 1
 	url = https://github.com/sophic00/nmtui
 	arch = x86_64
@@ -9,7 +9,7 @@ pkgbase = nmt
 	makedepends = git
 	makedepends = go
 	depends = networkmanager
-	source = nmt::git+https://github.com/sophic00/nmtui.git#tag=v0.3.0
+	source = nmt::git+https://github.com/sophic00/nmtui.git#tag=v0.3.1
 	sha256sums = SKIP
 
 pkgname = nmt

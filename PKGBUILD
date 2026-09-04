@@ -1,7 +1,7 @@
 # Maintainer: Vaibhav Sijaria <139199971+sophic00@users.noreply.github.com>
 
 pkgname=nmt
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=1
 pkgdesc="Terminal UI for managing Wi-Fi with NetworkManager"
 arch=('x86_64' 'aarch64')
