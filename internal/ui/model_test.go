@@ -292,13 +292,67 @@ func TestSpeedtestStartAndEsc(t *testing.T) {
 	}
 }
 
-func TestSpeedtestBlockedWhileBusy(t *testing.T) {
+func TestSpeedtestAllowedWhileScanning(t *testing.T) {
 	m := NewModel()
 	m.busy = "scanning"
 	m.wifi.Active.Name = "HomeNet"
+	m2, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mod := m2.(Model)
+	if mod.mode != modeSpeedtest {
+		t.Fatalf("s while scanning should start a speedtest, got mode %v", mod.mode)
+	}
+	if cmd == nil {
+		t.Error("expected speedtest batch cmd while scanning")
+	}
+}
+
+func TestSpeedtestBlockedWhileConnecting(t *testing.T) {
+	m := NewModel()
+	m.busy = "connecting to HomeNet"
+	m.wifi.Active.Name = "HomeNet"
 	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	if mod := m2.(Model); mod.mode == modeSpeedtest {
-		t.Error("s while busy should be ignored")
+		t.Error("s while a mutating action is busy should be ignored")
+	}
+}
+
+func TestRescanBlockedWhileScanning(t *testing.T) {
+	m := NewModel()
+	m.busy = "scanning"
+	m2, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	mod := m2.(Model)
+	if cmd != nil {
+		t.Error("r while scanning should not stack another rescan")
+	}
+	if mod.busy != "scanning" {
+		t.Errorf("r while scanning should not disturb busy, got %q", mod.busy)
+	}
+}
+
+func TestInitialApsMsgKeepsBusy(t *testing.T) {
+	m := NewModel()
+	m.busy = "scanning"
+	m.status.WifiEnabled = true
+
+	// The startup cached-list load fills the table but must not clear busy:
+	// the background rescan is still in flight.
+	m2, _ := m.Update(apsMsg{aps: []nm.AccessPoint{{SSID: "HomeNet", Signal: 80}}, initial: true})
+	mod := m2.(Model)
+	if mod.busy != "scanning" {
+		t.Errorf("initial apsMsg should keep busy, got %q", mod.busy)
+	}
+	if len(mod.aps) != 1 || mod.aps[0].SSID != "HomeNet" {
+		t.Errorf("initial apsMsg should populate the list, got %+v", mod.aps)
+	}
+
+	// A later apsMsg from the background rescan clears busy.
+	m3, _ := mod.Update(apsMsg{aps: []nm.AccessPoint{{SSID: "HomeNet", Signal: 85}}})
+	mod3 := m3.(Model)
+	if mod3.busy != "" {
+		t.Errorf("rescan apsMsg should clear busy, got %q", mod3.busy)
+	}
+	if mod3.aps[0].Signal != 85 {
+		t.Errorf("rescan apsMsg should refresh the list, got %+v", mod3.aps)
 	}
 }
 
