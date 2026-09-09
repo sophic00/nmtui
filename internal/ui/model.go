@@ -882,7 +882,7 @@ func (m Model) speedView() string {
 	}
 	cfg := speedtest.DefaultConfig()
 	title := "Speed test — " + boldStyle.Render(ssid)
-	sub := dimStyle.Render("server: "+cfg.BaseURL+"  ·  10s down + 10s up (4 streams)")
+	sub := dimStyle.Render("server: " + cfg.BaseURL + "  ·  10s down + 10s up (4 streams)")
 	var body strings.Builder
 	body.WriteString(title + "\n" + sub + "\n\n")
 
