@@ -319,7 +319,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pollMsg:
 		var cmds []tea.Cmd
 		cmds = append(cmds, pollCmd())
-		if m.busy == "" && m.mode == modeList && !m.speedActive {
+		scanning := m.busy == "" || m.busy == "scanning"
+		if scanning && m.mode == modeList && !m.speedActive {
 			cmds = append(cmds, m.stateCmd())
 		}
 		return m, tea.Batch(cmds...)
@@ -470,14 +471,23 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.busy != "" {
-		// Allow scrolling the table while busy, but block mutating actions
-		switch msg.String() {
-		case "r", "t", "d", "f", "s", "enter":
-			return m, nil
+		if m.busy == "scanning" {
+			// A scan is a passive refresh, not a mutating action: keep the
+			// UI usable and only prevent stacking another rescan on top.
+			if msg.String() == "r" {
+				return m, nil
+			}
+		} else {
+			// A mutating action is in flight. Allow scrolling the table
+			// while busy, but block mutating actions.
+			switch msg.String() {
+			case "r", "t", "d", "f", "s", "enter":
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.table, cmd = m.table.Update(msg)
+			return m, cmd
 		}
-		var cmd tea.Cmd
-		m.table, cmd = m.table.Update(msg)
-		return m, cmd
 	}
 
 	switch msg.String() {
@@ -825,7 +835,11 @@ func (m Model) View() string {
 		case !m.status.WifiEnabled:
 			b.WriteString(dimStyle.Render("Wi-Fi is disabled — press t to enable") + "\n")
 		case len(m.visible) == 0:
-			b.WriteString(dimStyle.Render("no networks found — press r to scan") + "\n")
+			if m.busy == "scanning" {
+				b.WriteString(dimStyle.Render("scanning for networks…") + "\n")
+			} else {
+				b.WriteString(dimStyle.Render("no networks found — press r to scan") + "\n")
+			}
 		default:
 			b.WriteString(m.table.View() + "\n")
 		}
