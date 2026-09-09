@@ -114,7 +114,17 @@ func pollCmd() tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.refreshCmd(true), m.spinner.Tick, pollCmd())
+	// Paint the list from NetworkManager's cached scan results immediately,
+	// then refresh it with a full rescan in the background so the UI is
+	// interactive right away instead of waiting out the scan.
+	return tea.Batch(
+		m.stateCmd(),
+		savedCmd(),
+		apsCachedCmd(),
+		apsCmd(true),
+		m.spinner.Tick,
+		pollCmd(),
+	)
 }
 
 type stateMsg struct {
@@ -126,6 +136,9 @@ type stateMsg struct {
 type apsMsg struct {
 	aps []nm.AccessPoint
 	err error
+	// initial marks the startup cached-list load. The full rescan is still
+	// in flight, so busy must stay set until that lands.
+	initial bool
 }
 
 type savedMsg struct {
@@ -164,6 +177,16 @@ func apsCmd(rescan bool) tea.Cmd {
 	return func() tea.Msg {
 		aps, err := nm.ListAccessPoints(rescan)
 		return apsMsg{aps: aps, err: err}
+	}
+}
+
+// apsCachedCmd lists access points without forcing a rescan, so it returns
+// NetworkManager's cached results almost instantly. Used for the initial
+// paint while the full rescan runs in the background.
+func apsCachedCmd() tea.Cmd {
+	return func() tea.Msg {
+		aps, err := nm.ListAccessPoints(false)
+		return apsMsg{aps: aps, err: err, initial: true}
 	}
 }
 
@@ -318,7 +341,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.setAPs(msg.aps)
 		}
-		if m.busy == "scanning" {
+		// The initial cached load must not clear busy: the background
+		// rescan that started alongside it is still running.
+		if !msg.initial && m.busy == "scanning" {
 			m.busy = ""
 		}
 		return m, nil
