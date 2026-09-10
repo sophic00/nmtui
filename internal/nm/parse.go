@@ -101,6 +101,22 @@ func parseSavedConnections(out string) []SavedConnection {
 	return conns
 }
 
+// parseConnectionSSID extracts the value of the 802-11-wireless.ssid property
+// from `nmcli -t -f 802-11-wireless.ssid connection show <uuid>` output.
+func parseConnectionSSID(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		f := splitTerse(line)
+		if len(f) >= 2 && f[0] == "802-11-wireless.ssid" {
+			return strings.Join(f[1:], ":")
+		}
+	}
+	return ""
+}
+
 func parseActiveConnections(out string) []ActiveConnection {
 	var conns []ActiveConnection
 

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -95,12 +96,22 @@ func TestApplyFilter(t *testing.T) {
 func TestSavedFor(t *testing.T) {
 	m := NewModel()
 	m.saved = []nm.SavedConnection{
-		{Name: "J-VIT", UUID: "uuid-1", Type: "802-11-wireless"},
-		{Name: "cube", UUID: "uuid-2", Type: "802-11-wireless"},
-		{Name: "vpn-home", UUID: "uuid-3", Type: "tun"},
+		{Name: "Home Profile", SSID: "HOME-5G", UUID: "uuid-1", Type: "802-11-wireless"},
+		{Name: "cube", SSID: "cube", UUID: "uuid-2", Type: "802-11-wireless"},
+		{Name: "legacy", UUID: "uuid-3", Type: "802-11-wireless"}, // SSID lookup failed
+		{Name: "vpn-home", UUID: "uuid-4", Type: "tun"},
+	}
+	if got := m.savedFor("HOME-5G"); got == nil || got.Name != "Home Profile" {
+		t.Errorf("savedFor(HOME-5G) = %+v, want profile 'Home Profile'", got)
+	}
+	if m.savedFor("Home Profile") != nil {
+		t.Error("savedFor should match the profile SSID, not its renamed name")
 	}
 	if m.savedFor("cube") == nil {
 		t.Error("savedFor(cube) should find profile")
+	}
+	if m.savedFor("legacy") == nil {
+		t.Error("savedFor(legacy) should fall back to the profile name when SSID is unknown")
 	}
 	if m.savedFor("vpn-home") != nil {
 		t.Error("savedFor(vpn-home) should ignore non-wifi profiles")
@@ -610,5 +621,42 @@ func TestSpeedtestQQuits(t *testing.T) {
 		t.Error("expected non-nil quit msg")
 	} else if _, ok := msg.(tea.QuitMsg); !ok {
 		t.Errorf("q should quit, got %T", msg)
+	}
+}
+
+func TestEscCancelsBusyAction(t *testing.T) {
+	m := NewModel()
+	m.busy = "connecting to HomeNet"
+	canceled := false
+	m.actionCancel = func() { canceled = true }
+
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyEsc})
+	if !canceled {
+		t.Error("esc during a mutating action should cancel it")
+	}
+	if mod := m2.(Model); mod.actionCancel != nil {
+		t.Error("cancel func should be cleared after esc")
+	}
+}
+
+func TestCanceledActionStaysSilent(t *testing.T) {
+	m := NewModel()
+	m.busy = "connecting to HomeNet"
+	m.actionCancel = func() {}
+
+	err := fmt.Errorf("connect to %q failed: %w", "HomeNet", context.Canceled)
+	m2, cmd := m.Update(actionMsg{err: err})
+	mod := m2.(Model)
+	if mod.busy != "" {
+		t.Errorf("busy = %q after cancelled action, want empty", mod.busy)
+	}
+	if mod.errMsg != "" {
+		t.Errorf("cancelled action should not show an error, got %q", mod.errMsg)
+	}
+	if mod.info != "cancelled" {
+		t.Errorf("info = %q, want 'cancelled'", mod.info)
+	}
+	if cmd != nil {
+		t.Error("cancelled action should not schedule a refresh")
 	}
 }

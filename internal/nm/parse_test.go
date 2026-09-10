@@ -210,3 +210,24 @@ func TestIsOpenSecurity(t *testing.T) {
 		}
 	}
 }
+
+func TestParseConnectionSSID(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "802-11-wireless.ssid:cube\n", "cube"},
+		{"escaped colon", `802-11-wireless.ssid:HOME\:5G`, "HOME:5G"},
+		{"empty ssid", "802-11-wireless.ssid:\n", ""},
+		{"unexpected property", "connection.id:cube\n", ""},
+		{"blank input", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseConnectionSSID(tt.in); got != tt.want {
+				t.Errorf("parseConnectionSSID(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

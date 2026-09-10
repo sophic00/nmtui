@@ -1,9 +1,17 @@
 package nm
 
-import "strings"
+import (
+	"context"
+	"strings"
+	"sync"
+)
 
-func GetStatus() (Status, error) {
-	genOut, err := run(defaultTimeout, "-t", "-f", "STATE,CONNECTIVITY,WIFI", "general", "status")
+// savedSSIDWorkers bounds how many `connection show <uuid>` lookups run in
+// parallel while resolving saved-profile SSIDs.
+const savedSSIDWorkers = 8
+
+func (c *Client) GetStatus(ctx context.Context) (Status, error) {
+	genOut, err := c.run(ctx, defaultTimeout, "-t", "-f", "STATE,CONNECTIVITY,WIFI", "general", "status")
 	if err != nil {
 		return Status{}, err
 	}
@@ -15,8 +23,8 @@ func GetStatus() (Status, error) {
 	}, nil
 }
 
-func GetWifiState() (WifiState, error) {
-	devOut, err := run(defaultTimeout, "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION,CON-UUID", "device", "status")
+func (c *Client) GetWifiState(ctx context.Context) (WifiState, error) {
+	devOut, err := c.run(ctx, defaultTimeout, "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION,CON-UUID", "device", "status")
 	if err != nil {
 		return WifiState{}, err
 	}
@@ -31,7 +39,7 @@ func GetWifiState() (WifiState, error) {
 	}
 
 	if st.Active.Name != "" {
-		ipOut, err := run(defaultTimeout, "-t", "-f", "IP4.ADDRESS", "device", "show", st.Device)
+		ipOut, err := c.run(ctx, defaultTimeout, "-t", "-f", "IP4.ADDRESS", "device", "show", st.Device)
 		if err == nil {
 			st.IP = parseDeviceIP(ipOut)
 		}
@@ -39,14 +47,14 @@ func GetWifiState() (WifiState, error) {
 	return st, nil
 }
 
-func ListAccessPoints(rescan bool) ([]AccessPoint, error) {
+func (c *Client) ListAccessPoints(ctx context.Context, rescan bool) ([]AccessPoint, error) {
 	rescanFlag := "no"
 	timeout := defaultTimeout
 	if rescan {
 		rescanFlag = "yes"
 		timeout = scanTimeout
 	}
-	out, err := run(timeout,
+	out, err := c.run(ctx, timeout,
 		"-t", "-f", "IN-USE,MODE,CHAN,RATE,SIGNAL,SECURITY,SSID",
 		"device", "wifi", "list", "--rescan", rescanFlag)
 	if err != nil {
@@ -55,24 +63,54 @@ func ListAccessPoints(rescan bool) ([]AccessPoint, error) {
 	return parseWifiList(out), nil
 }
 
-func ListSaved() ([]SavedConnection, error) {
-	out, err := run(defaultTimeout, "-t", "-f", "UUID,TYPE,AUTOCONNECT,NAME", "connection", "show")
+func (c *Client) ListSaved(ctx context.Context) ([]SavedConnection, error) {
+	out, err := c.run(ctx, defaultTimeout, "-t", "-f", "UUID,TYPE,AUTOCONNECT,NAME", "connection", "show")
 	if err != nil {
 		return nil, err
 	}
-	return parseSavedConnections(out), nil
+	conns := parseSavedConnections(out)
+	c.resolveSavedSSIDs(ctx, conns)
+	return conns, nil
 }
 
-func ToggleWifi(enable bool) error {
+// resolveSavedSSIDs fills in each profile's wireless SSID. Profile names can
+// be renamed independently of the SSID, so the SSID property is the only
+// reliable way to match a saved profile against a scanned access point.
+func (c *Client) resolveSavedSSIDs(ctx context.Context, conns []SavedConnection) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, savedSSIDWorkers)
+	for i := range conns {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+
+			out, err := c.run(ctx, defaultTimeout,
+				"-t", "-f", "802-11-wireless.ssid", "connection", "show", conns[i].UUID)
+			if err != nil {
+				return
+			}
+			conns[i].SSID = parseConnectionSSID(out)
+		}(i)
+	}
+	wg.Wait()
+}
+
+func (c *Client) ToggleWifi(ctx context.Context, enable bool) error {
 	state := "off"
 	if enable {
 		state = "on"
 	}
-	_, err := run(defaultTimeout, "radio", "wifi", state)
+	_, err := c.run(ctx, defaultTimeout, "radio", "wifi", state)
 	return err
 }
 
-func Connect(ssid, password, device string) error {
+func (c *Client) Connect(ctx context.Context, ssid, password, device string) error {
 	var args []string
 	var stdin string
 
@@ -87,17 +125,17 @@ func Connect(ssid, password, device string) error {
 		args = append(args, "ifname", device)
 	}
 
-	_, err := runWithStdin(connectTimeout, stdin, args...)
+	_, err := c.runWithStdin(ctx, connectTimeout, stdin, args...)
 	return err
 }
 
-func Disconnect(device string) error {
-	_, err := run(defaultTimeout, "device", "disconnect", device)
+func (c *Client) Disconnect(ctx context.Context, device string) error {
+	_, err := c.run(ctx, defaultTimeout, "device", "disconnect", device)
 	return err
 }
 
-func Forget(id string) error {
-	_, err := run(defaultTimeout, "connection", "delete", id)
+func (c *Client) Forget(ctx context.Context, id string) error {
+	_, err := c.run(ctx, defaultTimeout, "connection", "delete", id)
 	return err
 }
 

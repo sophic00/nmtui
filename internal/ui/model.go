@@ -41,6 +41,11 @@ type Model struct {
 	status  nm.Status
 	wifi    nm.WifiState
 
+	client       *nm.Client
+	baseCtx      context.Context
+	baseCancel   context.CancelFunc
+	actionCancel context.CancelFunc
+
 	table    table.Model
 	spinner  spinner.Model
 	pwdInput textinput.Model
@@ -91,8 +96,13 @@ func NewModelWithDevice(device string) Model {
 	f.Placeholder = "type to filter..."
 	f.Prompt = "/"
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return Model{
 		ifaceOverride: device,
+		client:        nm.NewClient(),
+		baseCtx:       ctx,
+		baseCancel:    cancel,
 		table:         t,
 		spinner:       spinner.New(spinner.WithSpinner(spinner.Dot)),
 		pwdInput:      pwd,
@@ -119,9 +129,9 @@ func (m Model) Init() tea.Cmd {
 	// interactive right away instead of waiting out the scan.
 	return tea.Batch(
 		m.stateCmd(),
-		savedCmd(),
-		apsCachedCmd(),
-		apsCmd(true),
+		m.savedCmd(),
+		m.apsCachedCmd(),
+		m.apsCmd(true),
 		m.spinner.Tick,
 		pollCmd(),
 	)
@@ -153,29 +163,31 @@ type actionMsg struct {
 }
 
 func (m Model) refreshCmd(rescan bool) tea.Cmd {
-	return tea.Batch(m.stateCmd(), apsCmd(rescan), savedCmd())
+	return tea.Batch(m.stateCmd(), m.apsCmd(rescan), m.savedCmd())
 }
 
 func (m Model) stateCmd() tea.Cmd {
+	client, ctx, override := m.client, m.baseCtx, m.ifaceOverride
 	return func() tea.Msg {
-		st, err := nm.GetStatus()
+		st, err := client.GetStatus(ctx)
 		if err != nil {
 			return stateMsg{err: err}
 		}
-		w, err := nm.GetWifiState()
+		w, err := client.GetWifiState(ctx)
 		if err != nil {
 			return stateMsg{status: st, err: err}
 		}
-		if m.ifaceOverride != "" {
-			w.Device = m.ifaceOverride
+		if override != "" {
+			w.Device = override
 		}
 		return stateMsg{status: st, wifi: w}
 	}
 }
 
-func apsCmd(rescan bool) tea.Cmd {
+func (m Model) apsCmd(rescan bool) tea.Cmd {
+	client, ctx := m.client, m.baseCtx
 	return func() tea.Msg {
-		aps, err := nm.ListAccessPoints(rescan)
+		aps, err := client.ListAccessPoints(ctx, rescan)
 		return apsMsg{aps: aps, err: err}
 	}
 }
@@ -183,23 +195,26 @@ func apsCmd(rescan bool) tea.Cmd {
 // apsCachedCmd lists access points without forcing a rescan, so it returns
 // NetworkManager's cached results almost instantly. Used for the initial
 // paint while the full rescan runs in the background.
-func apsCachedCmd() tea.Cmd {
+func (m Model) apsCachedCmd() tea.Cmd {
+	client, ctx := m.client, m.baseCtx
 	return func() tea.Msg {
-		aps, err := nm.ListAccessPoints(false)
+		aps, err := client.ListAccessPoints(ctx, false)
 		return apsMsg{aps: aps, err: err, initial: true}
 	}
 }
 
-func savedCmd() tea.Cmd {
+func (m Model) savedCmd() tea.Cmd {
+	client, ctx := m.client, m.baseCtx
 	return func() tea.Msg {
-		conns, err := nm.ListSaved()
+		conns, err := client.ListSaved(ctx)
 		return savedMsg{conns: conns, err: err}
 	}
 }
 
-func toggleCmd(on bool) tea.Cmd {
+func (m Model) toggleCmd(ctx context.Context, on bool) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
-		if err := nm.ToggleWifi(on); err != nil {
+		if err := client.ToggleWifi(ctx, on); err != nil {
 			return actionMsg{err: err}
 		}
 		if on {
@@ -209,30 +224,64 @@ func toggleCmd(on bool) tea.Cmd {
 	}
 }
 
-func connectCmd(ssid, password, device string) tea.Cmd {
+func (m Model) connectCmd(ctx context.Context, ssid, password, device string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
-		if err := nm.Connect(ssid, password, device); err != nil {
+		if err := client.Connect(ctx, ssid, password, device); err != nil {
 			return actionMsg{err: fmt.Errorf("connect to %q failed: %w", ssid, err)}
 		}
 		return actionMsg{info: "connected to " + ssid, rescan: true}
 	}
 }
 
-func disconnectCmd(device string) tea.Cmd {
+func (m Model) disconnectCmd(ctx context.Context, device string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
-		if err := nm.Disconnect(device); err != nil {
+		if err := client.Disconnect(ctx, device); err != nil {
 			return actionMsg{err: err}
 		}
 		return actionMsg{info: "disconnected"}
 	}
 }
 
-func forgetCmd(id, name string) tea.Cmd {
+func (m Model) forgetCmd(ctx context.Context, id, name string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
-		if err := nm.Forget(id); err != nil {
+		if err := client.Forget(ctx, id); err != nil {
 			return actionMsg{err: err}
 		}
 		return actionMsg{info: "forgot " + name}
+	}
+}
+
+// beginAction returns a context for a mutating nmcli call and records its
+// cancel func so esc or quit can interrupt the operation.
+func (m *Model) beginAction() context.Context {
+	if m.actionCancel != nil {
+		m.actionCancel()
+	}
+	base := m.baseCtx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithCancel(base)
+	m.actionCancel = cancel
+	return ctx
+}
+
+// shutdown cancels every background operation started by the model.
+func (m *Model) shutdown() {
+	if m.speedCancel != nil {
+		m.speedCancel()
+		m.speedCancel = nil
+	}
+	if m.actionCancel != nil {
+		m.actionCancel()
+		m.actionCancel = nil
+	}
+	if m.baseCancel != nil {
+		m.baseCancel()
+		m.baseCancel = nil
 	}
 }
 
@@ -358,8 +407,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case actionMsg:
+		m.actionCancel = nil
 		m.busy = ""
 		if msg.err != nil {
+			if errors.Is(msg.err, context.Canceled) {
+				m.setInfo("cancelled")
+				return m, nil
+			}
 			m.setErr(msg.err)
 		} else {
 			m.setInfo(msg.info)
@@ -405,10 +459,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
-		if m.speedCancel != nil {
-			m.speedCancel()
-			m.speedCancel = nil
-		}
+		m.shutdown()
 		m.speedCtx = nil
 		m.speedActive = false
 		return m, tea.Quit
@@ -449,6 +500,16 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// While a mutating action is in flight, esc cancels it instead of
+	// clearing status messages.
+	if msg.String() == "esc" && m.busy != "" && m.busy != "scanning" {
+		if m.actionCancel != nil {
+			m.actionCancel()
+			m.actionCancel = nil
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "esc":
 		if m.filter.Value() != "" {
@@ -463,6 +524,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "q":
+		m.shutdown()
 		return m, tea.Quit
 
 	case "/":
@@ -494,12 +556,13 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.busy = "scanning"
 		m.setInfo("")
-		return m, tea.Batch(apsCmd(true), m.spinner.Tick)
+		return m, tea.Batch(m.apsCmd(true), m.spinner.Tick)
 
 	case "t":
 		on := !m.status.WifiEnabled
 		m.busy = "turning Wi-Fi " + onOffWord(on)
-		return m, tea.Batch(toggleCmd(on), m.spinner.Tick)
+		ctx := m.beginAction()
+		return m, tea.Batch(m.toggleCmd(ctx, on), m.spinner.Tick)
 
 	case "d":
 		if m.wifi.Active.Name == "" {
@@ -562,7 +625,8 @@ func (m Model) startConnect(ap nm.AccessPoint) (tea.Model, tea.Cmd) {
 	if m.savedFor(ap.SSID) != nil || nm.IsOpenSecurity(ap.Security) {
 		m.busy = "connecting to " + ap.SSID
 		m.setInfo("")
-		return m, tea.Batch(connectCmd(ap.SSID, "", m.wifi.Device), m.spinner.Tick)
+		ctx := m.beginAction()
+		return m, tea.Batch(m.connectCmd(ctx, ap.SSID, "", m.wifi.Device), m.spinner.Tick)
 	}
 	if strings.Contains(ap.Security, "802.1X") {
 		m.setWarn("802.1X enterprise network requires a pre-configured profile")
@@ -586,7 +650,8 @@ func (m Model) updatePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		m.busy = "connecting to " + ssid
 		m.setInfo("")
-		return m, tea.Batch(connectCmd(ssid, pw, m.wifi.Device), m.spinner.Tick)
+		ctx := m.beginAction()
+		return m, tea.Batch(m.connectCmd(ctx, ssid, pw, m.wifi.Device), m.spinner.Tick)
 	}
 	var cmd tea.Cmd
 	m.pwdInput, cmd = m.pwdInput.Update(msg)
@@ -602,12 +667,14 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			id, name := m.pendingForget.UUID, m.pendingForget.Name
 			m.busy = "forgetting " + name
 			m.setInfo("")
-			return m, tea.Batch(forgetCmd(id, name), m.spinner.Tick)
+			ctx := m.beginAction()
+			return m, tea.Batch(m.forgetCmd(ctx, id, name), m.spinner.Tick)
 		case confirmDisconnect:
 			name := m.wifi.Active.Name
 			m.busy = "disconnecting from " + name
 			m.setInfo("")
-			return m, tea.Batch(disconnectCmd(m.wifi.Device), m.spinner.Tick)
+			ctx := m.beginAction()
+			return m, tea.Batch(m.disconnectCmd(ctx, m.wifi.Device), m.spinner.Tick)
 		}
 		return m, nil
 	case "n", "N", "esc":
@@ -631,10 +698,7 @@ func (m Model) updateSpeedtest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		return m, nil
 	case "q":
-		if m.speedCancel != nil {
-			m.speedCancel()
-			m.speedCancel = nil
-		}
+		m.shutdown()
 		m.speedCtx = nil
 		m.speedActive = false
 		return m, tea.Quit
@@ -764,8 +828,18 @@ func (m Model) savedFor(ssid string) *nm.SavedConnection {
 		return nil
 	}
 	for i := range m.saved {
-		if (m.saved[i].Type == "" || m.saved[i].Type == "802-11-wireless") && m.saved[i].Name == ssid {
-			return &m.saved[i]
+		conn := &m.saved[i]
+		if conn.Type != "" && conn.Type != "802-11-wireless" {
+			continue
+		}
+		// Match on the profile's SSID: users can rename profiles, so the
+		// profile Name is not a reliable key.
+		if conn.SSID == ssid {
+			return conn
+		}
+		// Fall back to the profile name when the SSID lookup failed.
+		if conn.SSID == "" && conn.Name == ssid {
+			return conn
 		}
 	}
 	return nil

@@ -13,6 +13,10 @@ type SavedConnection struct {
 	UUID        string
 	Type        string
 	Autoconnect string
+	// SSID is the network this profile is for. It can differ from the
+	// profile Name when a user renames a connection, so SSID is what
+	// access points must be matched against.
+	SSID string
 }
 
 type ActiveConnection struct {
