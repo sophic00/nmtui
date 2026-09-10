@@ -19,6 +19,8 @@ type keyMap struct {
 	Speedtest    key.Binding
 	Quicktest    key.Binding
 	SavedNetwork key.Binding
+	Hidden       key.Binding
+	Device       key.Binding
 	Quit         key.Binding
 }
 
@@ -34,13 +36,16 @@ var keys = keyMap{
 	Speedtest:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "speedtest")),
 	Quicktest:    key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "quick test")),
 	SavedNetwork: key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "saved networks")),
+	Hidden:       key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "hidden network")),
+	Device:       key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "switch device")),
 	Quit:         key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 }
 
 var mainBindings = []key.Binding{
 	keys.Connect, keys.Rescan, keys.Toggle, keys.Disconnect,
 	keys.Forget, keys.Details, keys.Filter, keys.Sort,
-	keys.Speedtest, keys.Quicktest, keys.SavedNetwork, keys.Quit,
+	keys.Speedtest, keys.Quicktest, keys.SavedNetwork, keys.Hidden,
+	keys.Device, keys.Quit,
 }
 
 var savedBindings = []key.Binding{

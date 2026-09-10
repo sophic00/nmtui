@@ -208,12 +208,13 @@ func parseDeviceIP(out string) string {
 	return ""
 }
 
-func parseWifiDevice(out string) string {
+func parseWifiDevices(out string) []string {
+	var devices []string
 	for _, line := range strings.Split(out, "\n") {
 		f := splitTerse(strings.TrimSpace(line))
 		if len(f) >= 2 && f[1] == "wifi" {
-			return f[0]
+			devices = append(devices, f[0])
 		}
 	}
-	return ""
+	return devices
 }

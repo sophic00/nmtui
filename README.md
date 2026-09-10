@@ -20,6 +20,8 @@ A terminal UI for managing Wi-Fi with NetworkManager, built with
 - Speed test the active connection (`s`): ping + 10s download + 10s upload
   against Cloudflare, with live progress; `S` runs a quick 5s + 5s test
   (stdlib only, no extra dependencies)
+- Connect to hidden networks by SSID (`h`)
+- Multiple Wi-Fi devices: switch the managed interface (`D`)
 - Mouse wheel scrolling
 
 ## Requirements
@@ -83,6 +85,8 @@ make build            # or: make check (vet + tests), make run, make install
 | `i` | show network details |
 | `o` | cycle sort order (signal → name → channel → security) |
 | `F` | saved networks view |
+| `h` | connect to a hidden network by SSID |
+| `D` | switch Wi-Fi device (multi-NIC) |
 | `/` | filter networks |
 | `s` | speed test active connection |
 | `S` | quick speed test (5s down + 5s up) |
@@ -106,9 +110,8 @@ In the saved networks view:
 
 - If a saved profile has a stale password, connect will fail — press `f` to
   forget the network, then `enter` to reconnect with the correct password.
-- Hidden networks appear as `(hidden network)` and cannot be joined from the
-  list; create a profile for them once via `nmcli` and they will show up
-  normally afterwards.
+- Hidden networks appear as `(hidden network)`. Press `h` to join one by
+  SSID; the profile is then saved normally and shows up in the list.
 
 ## Layout
 

@@ -196,10 +196,14 @@ func TestParseDeviceIP(t *testing.T) {
 	}
 }
 
-func TestParseWifiDevice(t *testing.T) {
-	out := "wlan0:wifi\ntailscale0:tun\nlo:loopback\np2p-dev-wlan0:wifi-p2p\n"
-	if dev := parseWifiDevice(out); dev != "wlan0" {
-		t.Errorf("got %q, want wlan0 (wifi-p2p must not match)", dev)
+func TestParseWifiDevices(t *testing.T) {
+	out := "wlan0:wifi\ntailscale0:tun\nlo:loopback\np2p-dev-wlan0:wifi-p2p\nwlan1:wifi\n"
+	devices := parseWifiDevices(out)
+	if len(devices) != 2 || devices[0] != "wlan0" || devices[1] != "wlan1" {
+		t.Errorf("got %q, want [wlan0 wlan1] (wifi-p2p must not match)", devices)
+	}
+	if got := parseWifiDevices(""); len(got) != 0 {
+		t.Errorf("empty output should give no devices, got %q", got)
 	}
 }
 

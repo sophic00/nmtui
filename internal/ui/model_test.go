@@ -505,12 +505,12 @@ func TestHelpViewFitsWidth(t *testing.T) {
 		}
 	}
 	// Wide terminals keep the full one-line bar with full descriptions.
-	wide := helpLines(220)
+	wide := helpLines(320)
 	if len(wide) != 1 {
-		t.Errorf("width 220: expected 1 help line, got %d: %q", len(wide), wide)
+		t.Errorf("width 320: expected 1 help line, got %d: %q", len(wide), wide)
 	}
 	if !strings.Contains(wide[0], "speedtest") {
-		t.Errorf("width 220: expected full descriptions, got %q", wide[0])
+		t.Errorf("width 320: expected full descriptions, got %q", wide[0])
 	}
 	// Full words are never abbreviated, even on narrow terminals where
 	// the bar wraps instead.
@@ -960,4 +960,67 @@ func TestSavedViewEditPassword(t *testing.T) {
 		t.Errorf("saving should emit a modify command: cmd=%v busy=%q", cmd, mod3.busy)
 	}
 	mod3.shutdown()
+}
+
+func TestHiddenNetworkFlow(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	mod := m2.(Model)
+	if mod.mode != modeHiddenSSID {
+		t.Fatalf("h should open the hidden SSID prompt, got mode %v", mod.mode)
+	}
+
+	// Empty SSID is rejected.
+	m3, _ := mod.updateHiddenSSID(tea.KeyMsg{Type: tea.KeyEnter})
+	mod3 := m3.(Model)
+	if mod3.mode != modeHiddenSSID || mod3.warnMsg == "" {
+		t.Errorf("empty SSID should warn and stay: mode=%v warn=%q", mod3.mode, mod3.warnMsg)
+	}
+
+	mod.hiddenInput.SetValue("Secret")
+	m4, _ := mod.updateHiddenSSID(tea.KeyMsg{Type: tea.KeyEnter})
+	mod4 := m4.(Model)
+	if mod4.mode != modePassword || mod4.pwdPurpose != pwdHidden || mod4.connectSSID != "Secret" {
+		t.Fatalf("hidden SSID should lead to the password prompt: mode=%v purpose=%v ssid=%q",
+			mod4.mode, mod4.pwdPurpose, mod4.connectSSID)
+	}
+
+	mod4.pwdInput.SetValue("s3cret")
+	m5, cmd := mod4.updatePassword(tea.KeyMsg{Type: tea.KeyEnter})
+	mod5 := m5.(Model)
+	if mod5.mode != modeList || cmd == nil || !strings.Contains(mod5.busy, "Secret") {
+		t.Errorf("hidden connect should start: mode=%v cmd=%v busy=%q", mod5.mode, cmd, mod5.busy)
+	}
+	mod5.shutdown()
+}
+
+func TestSwitchDevice(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.wifi = nm.WifiState{Device: "wlan0", Devices: []string{"wlan0", "wlan1"}}
+
+	m2, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	mod := m2.(Model)
+	if mod.ifaceOverride != "wlan1" {
+		t.Errorf("D should switch to the next device, got %q", mod.ifaceOverride)
+	}
+	if cmd == nil || mod.busy != "scanning" {
+		t.Errorf("device switch should rescan: cmd=%v busy=%q", cmd, mod.busy)
+	}
+
+	// Cycling wraps back around.
+	m3, _ := mod.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	if got := m3.(Model).ifaceOverride; got != "wlan0" {
+		t.Errorf("D should wrap to wlan0, got %q", got)
+	}
+
+	// A single device has nowhere to switch.
+	single := NewModel()
+	single.wifi = nm.WifiState{Device: "wlan0", Devices: []string{"wlan0"}}
+	m4, cmd := single.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	if cmd != nil || m4.(Model).warnMsg == "" {
+		t.Errorf("single device should warn: cmd=%v warn=%q", cmd, m4.(Model).warnMsg)
+	}
 }

@@ -40,4 +40,6 @@ type WifiState struct {
 	Device string
 	Active ActiveConnection
 	IP     string
+	// Devices lists all Wi-Fi interfaces reported by NetworkManager.
+	Devices []string
 }

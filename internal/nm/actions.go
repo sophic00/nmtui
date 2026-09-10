@@ -26,24 +26,30 @@ func (c *Client) GetStatus(ctx context.Context) (Status, error) {
 // GetWifiState returns the state of iface. When iface is empty the first
 // Wi-Fi device reported by NetworkManager is used.
 func (c *Client) GetWifiState(ctx context.Context, iface string) (WifiState, error) {
-	if iface == "" {
-		out, err := c.run(ctx, defaultTimeout, "-t", "-f", "DEVICE,TYPE", "device", "status")
-		if err != nil {
-			return WifiState{}, err
-		}
-		iface = parseWifiDevice(out)
+	out, err := c.run(ctx, defaultTimeout, "-t", "-f", "DEVICE,TYPE", "device", "status")
+	if err != nil {
+		return WifiState{}, err
+	}
+	devices := parseWifiDevices(out)
+	if iface == "" && len(devices) > 0 {
+		iface = devices[0]
 	}
 	if iface == "" {
-		return WifiState{}, nil
+		return WifiState{Devices: devices}, nil
 	}
 
-	out, err := c.run(ctx, defaultTimeout, "-t", "-f",
+	out, err = c.run(ctx, defaultTimeout, "-t", "-f",
 		"GENERAL.DEVICE,GENERAL.TYPE,GENERAL.STATE,GENERAL.CONNECTION,GENERAL.CON-UUID,IP4.ADDRESS",
 		"device", "show", iface)
 	if err != nil {
 		return WifiState{}, err
 	}
-	return parseDeviceState(out)
+	st, err := parseDeviceState(out)
+	if err != nil {
+		return WifiState{}, err
+	}
+	st.Devices = devices
+	return st, nil
 }
 
 func (c *Client) ListAccessPoints(ctx context.Context, rescan bool, iface string) ([]AccessPoint, error) {
@@ -145,20 +151,29 @@ func (c *Client) ToggleWifi(ctx context.Context, enable bool) error {
 }
 
 func (c *Client) Connect(ctx context.Context, ssid, password, device string) error {
+	return c.connect(ctx, ssid, password, device, false)
+}
+
+// ConnectHidden joins a network that does not broadcast its SSID.
+func (c *Client) ConnectHidden(ctx context.Context, ssid, password, device string) error {
+	return c.connect(ctx, ssid, password, device, true)
+}
+
+func (c *Client) connect(ctx context.Context, ssid, password, device string, hidden bool) error {
 	// Snapshot saved profiles before connecting so a failed attempt can
 	// remove only the profile nmcli created, never a pre-existing one.
 	before, beforeErr := c.listProfiles(ctx)
 
 	var args []string
-	var stdin string
-
+	stdin := ""
 	if password != "" {
-		args = []string{"--ask", "--wait", connectWait, "device", "wifi", "connect", ssid}
+		args = append(args, "--ask")
 		stdin = password + "\n"
-	} else {
-		args = []string{"--wait", connectWait, "device", "wifi", "connect", ssid}
 	}
-
+	args = append(args, "--wait", connectWait, "device", "wifi", "connect", ssid)
+	if hidden {
+		args = append(args, "hidden", "yes")
+	}
 	if device != "" {
 		args = append(args, "ifname", device)
 	}

@@ -30,6 +30,7 @@ const (
 	modeSpeedtest
 	modeDetails
 	modeSaved
+	modeHiddenSSID
 )
 
 type pwdPurpose int
@@ -37,6 +38,7 @@ type pwdPurpose int
 const (
 	pwdConnect pwdPurpose = iota
 	pwdEditPassword
+	pwdHidden
 )
 
 type sortMode int
@@ -87,11 +89,12 @@ type Model struct {
 	apsApplied   int
 	savedApplied int
 
-	table      table.Model
-	savedTable table.Model
-	spinner    spinner.Model
-	pwdInput   textinput.Model
-	filter     textinput.Model
+	table       table.Model
+	savedTable  table.Model
+	spinner     spinner.Model
+	pwdInput    textinput.Model
+	hiddenInput textinput.Model
+	filter      textinput.Model
 
 	mode          mode
 	confirm       confirmKind
@@ -150,6 +153,9 @@ func NewModelWithDevice(device string) Model {
 	pwd.EchoMode = textinput.EchoPassword
 	pwd.Placeholder = "password"
 
+	hidden := textinput.New()
+	hidden.Placeholder = "network name (SSID)"
+
 	f := textinput.New()
 	f.Placeholder = "type to filter..."
 	f.Prompt = "/"
@@ -165,6 +171,7 @@ func NewModelWithDevice(device string) Model {
 		savedTable:    saved,
 		spinner:       spinner.New(spinner.WithSpinner(spinner.Dot)),
 		pwdInput:      pwd,
+		hiddenInput:   hidden,
 		filter:        f,
 		busy:          "scanning",
 	}
@@ -298,6 +305,16 @@ func (m Model) connectCmd(ctx context.Context, ssid, password, device string) te
 	client := m.client
 	return func() tea.Msg {
 		if err := client.Connect(ctx, ssid, password, device); err != nil {
+			return actionMsg{err: fmt.Errorf("connect to %q failed: %w", ssid, err)}
+		}
+		return actionMsg{info: "connected to " + ssid, rescan: true}
+	}
+}
+
+func (m Model) connectHiddenCmd(ctx context.Context, ssid, password, device string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if err := client.ConnectHidden(ctx, ssid, password, device); err != nil {
 			return actionMsg{err: fmt.Errorf("connect to %q failed: %w", ssid, err)}
 		}
 		return actionMsg{info: "connected to " + ssid, rescan: true}
@@ -599,6 +616,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateDetails(msg)
 	case modeSaved:
 		return m.updateSaved(msg)
+	case modeHiddenSSID:
+		return m.updateHiddenSSID(msg)
 	default:
 		return m.updateList(msg)
 	}
@@ -670,7 +689,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// A mutating action is in flight. Allow scrolling the table
 			// while busy, but block mutating actions.
 			switch msg.String() {
-			case "r", "t", "d", "f", "s", "S", "enter", "F":
+			case "r", "t", "d", "f", "s", "S", "enter", "F", "h", "D":
 				return m, nil
 			}
 			var cmd tea.Cmd
@@ -748,6 +767,37 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.layout()
 		return m, nil
 
+	case "h":
+		m.mode = modeHiddenSSID
+		m.hiddenInput.Reset()
+		return m, m.hiddenInput.Focus()
+
+	case "D":
+		devices := m.wifi.Devices
+		if len(devices) < 2 {
+			m.setWarn("no other Wi-Fi device available")
+			return m, nil
+		}
+		cur := m.ifaceOverride
+		if cur == "" {
+			cur = m.wifi.Device
+		}
+		next := devices[0]
+		for i, d := range devices {
+			if d == cur {
+				next = devices[(i+1)%len(devices)]
+				break
+			}
+		}
+		if next == cur {
+			m.setWarn("no other Wi-Fi device available")
+			return m, nil
+		}
+		m.ifaceOverride = next
+		m.busy = "scanning"
+		m.setInfo("using " + next)
+		return m, tea.Batch(m.stateCmd(), m.apsCmd(true), m.spinner.Tick)
+
 	case "s", "S":
 		if m.wifi.Active.Name == "" {
 			m.setWarn("not connected — join a network first")
@@ -799,6 +849,7 @@ func (m Model) updatePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pwdInput.Reset()
 			return m, nil
 		}
+		m.pwdPurpose = pwdConnect
 		m.mode = modeList
 		m.pwdInput.Reset()
 		return m, nil
@@ -813,6 +864,15 @@ func (m Model) updatePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setInfo("")
 			ctx := m.beginAction()
 			return m, tea.Batch(m.modifyPasswordCmd(ctx, conn.UUID, name, pw), m.spinner.Tick)
+		}
+		if m.pwdPurpose == pwdHidden {
+			ssid := m.connectSSID
+			m.mode = modeList
+			m.pwdPurpose = pwdConnect
+			m.busy = "connecting to " + ssid
+			m.setInfo("")
+			ctx := m.beginAction()
+			return m, tea.Batch(m.connectHiddenCmd(ctx, ssid, pw, m.wifi.Device), m.spinner.Tick)
 		}
 		ssid := m.connectSSID
 		m.mode = modeList
@@ -992,6 +1052,29 @@ func (m Model) updateSaved(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m Model) updateHiddenSSID(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeList
+		m.hiddenInput.Reset()
+		return m, nil
+	case "enter":
+		ssid := strings.TrimSpace(m.hiddenInput.Value())
+		if ssid == "" {
+			m.setWarn("enter the hidden network's SSID")
+			return m, nil
+		}
+		m.connectSSID = ssid
+		m.mode = modePassword
+		m.pwdPurpose = pwdHidden
+		m.pwdInput.Reset()
+		return m, m.pwdInput.Focus()
+	}
+	var cmd tea.Cmd
+	m.hiddenInput, cmd = m.hiddenInput.Update(msg)
+	return m, cmd
 }
 
 func (m Model) selectedSaved() *nm.SavedConnection {
@@ -1309,8 +1392,11 @@ func (m Model) View() string {
 	switch m.mode {
 	case modePassword:
 		title := "Password for " + boldStyle.Render(sanitizeSSID(m.connectSSID))
-		if m.pwdPurpose == pwdEditPassword {
+		switch m.pwdPurpose {
+		case pwdEditPassword:
 			title = "New password for " + boldStyle.Render(sanitizeSSID(savedDisplayName(m.editConn)))
+		case pwdHidden:
+			title = "Password for hidden network " + boldStyle.Render(sanitizeSSID(m.connectSSID))
 		}
 		reveal := "show"
 		if m.pwdInput.EchoMode == textinput.EchoNormal {
@@ -1323,6 +1409,14 @@ func (m Model) View() string {
 		body := title +
 			"\n\n" + m.pwdInput.View() +
 			"\n\n" + dimStyle.Render("ctrl+r: "+reveal+"  ·  enter: "+action+"  ·  esc: cancel")
+		if m.pwdPurpose == pwdHidden {
+			body += "\n" + dimStyle.Render("leave empty for an open network")
+		}
+		b.WriteString(boxStyle.Render(body))
+
+	case modeHiddenSSID:
+		body := "Hidden network\n\n" + m.hiddenInput.View() +
+			"\n\n" + dimStyle.Render("enter: continue  ·  esc: cancel")
 		b.WriteString(boxStyle.Render(body))
 
 	case modeConfirm:

@@ -125,6 +125,22 @@ func TestConnectOpenNetwork(t *testing.T) {
 	}
 }
 
+func TestConnectHidden(t *testing.T) {
+	runner := &fakeRunner{}
+	err := NewClientWithRunner(runner).ConnectHidden(context.Background(), "Secret", "s3cret", "wlan0")
+	if err != nil {
+		t.Fatalf("ConnectHidden: %v", err)
+	}
+	call, stdin := connectCall(t, runner)
+	want := []string{"--ask", "--wait", connectWait, "device", "wifi", "connect", "Secret", "hidden", "yes", "ifname", "wlan0"}
+	if !reflect.DeepEqual(call, want) {
+		t.Errorf("args = %q, want %q", call, want)
+	}
+	if stdin != "s3cret\n" {
+		t.Errorf("stdin = %q, want password", stdin)
+	}
+}
+
 func TestConnectRemovesProfileLeftByFailure(t *testing.T) {
 	listCalls := 0
 	runner := &fakeRunner{fn: func(args []string) (string, error) {
@@ -208,11 +224,18 @@ func TestGetWifiStateAutoDetectsDevice(t *testing.T) {
 	if st.Device != "wlan0" || st.Active.Name != "cube" || st.IP != "10.0.0.2/24" {
 		t.Errorf("auto-detected state wrong: %+v", st)
 	}
+	if len(st.Devices) != 1 || st.Devices[0] != "wlan0" {
+		t.Errorf("devices = %q, want [wlan0]", st.Devices)
+	}
 }
 
 func TestGetWifiStateHonorsInterface(t *testing.T) {
 	runner := &fakeRunner{fn: func(args []string) (string, error) {
-		if strings.Contains(strings.Join(args, " "), "device show wlan1") {
+		joined := strings.Join(args, " ")
+		switch {
+		case joined == "-t -f DEVICE,TYPE device status":
+			return "wlan0:wifi\nwlan1:wifi\n", nil
+		case strings.Contains(joined, "device show wlan1"):
 			return "GENERAL.DEVICE:wlan1\nGENERAL.TYPE:wifi\n", nil
 		}
 		return "", fmt.Errorf("unexpected args: %q", args)
@@ -225,10 +248,13 @@ func TestGetWifiStateHonorsInterface(t *testing.T) {
 	if st.Device != "wlan1" {
 		t.Errorf("device = %q, want wlan1", st.Device)
 	}
-	// An explicit interface must not require the auto-detect call.
+	if len(st.Devices) != 2 || st.Devices[1] != "wlan1" {
+		t.Errorf("devices = %q, want both interfaces", st.Devices)
+	}
+	// The explicit interface must be the one queried.
 	for _, call := range runner.calls {
-		if reflect.DeepEqual(call, []string{"-t", "-f", "DEVICE,TYPE", "device", "status"}) {
-			t.Error("explicit interface should skip device auto-detection")
+		if strings.Contains(strings.Join(call, " "), "device show wlan0") {
+			t.Errorf("must not query the other device: %q", call)
 		}
 	}
 }
