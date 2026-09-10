@@ -31,10 +31,10 @@ func TestSplitTerse(t *testing.T) {
 
 func TestParseWifiList(t *testing.T) {
 	out := strings.Join([]string{
-		` :Infra:11:195 Mbit/s:44:WPA2:Weak Signal`,
-		`*:Infra:60:270 Mbit/s:49:WPA3:Home\:Net`,
-		` :Infra:6:130 Mbit/s:79::Open Cafe`,
-		` :Infra:1:130 Mbit/s:92:WPA2 802.1X:Corporate`,
+		` :FC\:0A\:81\:DD\:62\:30:Infra:11:2462 MHz:195 Mbit/s:44:WPA2:Weak Signal`,
+		`*:46\:DA\:2A\:D9\:C7\:77:Infra:60:5180 MHz:1170 Mbit/s:49:WPA3:Home\:Net`,
+		` :B4\:C7\:99\:4A\:4A\:30:Infra:6:2437 MHz:130 Mbit/s:79::Open Cafe`,
+		` :30\:CB\:C7\:90\:ED\:30:Infra:1:2412 MHz:130 Mbit/s:92:WPA2 802.1X:Corporate`,
 		"",
 	}, "\n")
 
@@ -45,6 +45,9 @@ func TestParseWifiList(t *testing.T) {
 
 	if !aps[0].InUse || aps[0].SSID != "Home:Net" || aps[0].Signal != 49 || aps[0].Security != "WPA3" || aps[0].Chan != "60" {
 		t.Errorf("in-use AP not first or fields wrong: %+v", aps[0])
+	}
+	if aps[0].BSSID != "46:DA:2A:D9:C7:77" || aps[0].Freq != "5180 MHz" || aps[0].Rate != "1170 Mbit/s" {
+		t.Errorf("in-use AP details wrong: %+v", aps[0])
 	}
 	if aps[1].SSID != "Corporate" || aps[1].Signal != 92 || aps[1].Security != "WPA2 802.1X" {
 		t.Errorf("second AP wrong (should be sorted by signal desc): %+v", aps[1])
@@ -58,22 +61,22 @@ func TestParseWifiList(t *testing.T) {
 }
 
 func TestParseWifiListHiddenNetwork(t *testing.T) {
-	out := " :Infra:6:130 Mbit/s:80:WPA2:"
+	out := ` :AA\:BB\:CC\:DD\:EE\:01:Infra:6:2437 MHz:130 Mbit/s:80:WPA2:`
 	aps := parseWifiList(out)
-	if len(aps) != 1 || aps[0].SSID != "" {
+	if len(aps) != 1 || aps[0].SSID != "" || aps[0].BSSID != "AA:BB:CC:DD:EE:01" {
 		t.Errorf("hidden network (empty SSID) mishandled: %+v", aps)
 	}
 }
 
 func TestParseWifiListDeduplication(t *testing.T) {
 	out := strings.Join([]string{
-		` :Infra:1:130 Mbit/s:50:WPA2:Campus`,
-		` :Infra:6:130 Mbit/s:85:WPA2:Campus`,
-		` :Infra:11:130 Mbit/s:65:WPA2:Campus`,
-		` :Infra:1:130 Mbit/s:70:WPA2:HomeNet`,
-		`*:Infra:6:130 Mbit/s:40:WPA2:HomeNet`, // In-use, weaker signal than 70
-		` :Infra:1:130 Mbit/s:80:WPA2:`,        // Hidden 1
-		` :Infra:6:130 Mbit/s:75:WPA2:`,        // Hidden 2
+		` :AA\:AA\:AA\:AA\:AA\:01:Infra:1:2412 MHz:130 Mbit/s:50:WPA2:Campus`,
+		` :AA\:AA\:AA\:AA\:AA\:02:Infra:6:2437 MHz:130 Mbit/s:85:WPA2:Campus`,
+		` :AA\:AA\:AA\:AA\:AA\:03:Infra:11:2462 MHz:130 Mbit/s:65:WPA2:Campus`,
+		` :BB\:BB\:BB\:BB\:BB\:01:Infra:1:2412 MHz:130 Mbit/s:70:WPA2:HomeNet`,
+		`*:BB\:BB\:BB\:BB\:BB\:02:Infra:6:2437 MHz:130 Mbit/s:40:WPA2:HomeNet`, // In-use, weaker signal than 70
+		` :CC\:CC\:CC\:CC\:CC\:01:Infra:1:2412 MHz:130 Mbit/s:80:WPA2:`,        // Hidden 1
+		` :CC\:CC\:CC\:CC\:CC\:02:Infra:6:2437 MHz:130 Mbit/s:75:WPA2:`,        // Hidden 2
 	}, "\n")
 
 	aps := parseWifiList(out)
@@ -95,6 +98,9 @@ func TestParseWifiListDeduplication(t *testing.T) {
 	if aps[2].SSID != "" || aps[3].SSID != "" {
 		t.Errorf("expected both hidden networks preserved, got: %+v and %+v", aps[2], aps[3])
 	}
+	if aps[2].BSSID == aps[3].BSSID {
+		t.Errorf("hidden networks should keep distinct BSSIDs, got %q twice", aps[2].BSSID)
+	}
 }
 
 func TestParseSavedConnections(t *testing.T) {
@@ -113,19 +119,6 @@ func TestParseSavedConnections(t *testing.T) {
 	}
 	if conns[1].Name != "arin's phone" {
 		t.Errorf("name with spaces wrong: %+v", conns[1])
-	}
-}
-
-func TestParseActiveConnections(t *testing.T) {
-	out := `a4ca6cee-0db4-4280-9ec6-8fc34c73f1dd:tun:tailscale0:tailscale0
-9379a045-40d0-4114-b2a6-451770aa9ebf:802-11-wireless:wlan0:J-VIT`
-
-	conns := parseActiveConnections(out)
-	if len(conns) != 2 {
-		t.Fatalf("expected 2 active connections, got %d", len(conns))
-	}
-	if conns[1].Device != "wlan0" || conns[1].Name != "J-VIT" || conns[1].Type != "802-11-wireless" {
-		t.Errorf("wifi active connection wrong: %+v", conns[1])
 	}
 }
 
@@ -155,29 +148,41 @@ func TestParseGeneralStatus(t *testing.T) {
 	}
 }
 
-func TestParseWifiDeviceStatus(t *testing.T) {
-	out := strings.Join([]string{
-		`wlan0:wifi:connected:J-VIT:9379a045-40d0-4114-b2a6-451770aa9ebf`,
-		`tailscale0:tun:connected:tailscale0:uuid-ts`,
-		`p2p-dev-wlan0:wifi-p2p:disconnected::`,
+func TestParseDeviceState(t *testing.T) {
+	connected := strings.Join([]string{
+		"GENERAL.DEVICE:wlan0",
+		"GENERAL.TYPE:wifi",
+		"GENERAL.STATE:100 (connected)",
+		"GENERAL.CONNECTION:cube",
+		"GENERAL.CON-UUID:abc-123",
+		"IP4.ADDRESS[1]:172.26.100.172/24",
+		"IP4.GATEWAY:172.26.100.180",
 	}, "\n")
+	st, err := parseDeviceState(connected)
+	if err != nil {
+		t.Fatalf("connected device: %v", err)
+	}
+	if st.Device != "wlan0" || st.IP != "172.26.100.172/24" {
+		t.Errorf("device/IP wrong: %+v", st)
+	}
+	if st.Active.Name != "cube" || st.Active.UUID != "abc-123" || st.Active.Device != "wlan0" {
+		t.Errorf("active connection wrong: %+v", st.Active)
+	}
 
-	dev, active := parseWifiDeviceStatus(out)
-	if dev != "wlan0" {
-		t.Errorf("got device %q, want wlan0", dev)
+	disconnected := "GENERAL.DEVICE:wlan0\nGENERAL.TYPE:wifi\nGENERAL.CONNECTION:\nGENERAL.CON-UUID:\n"
+	st, err = parseDeviceState(disconnected)
+	if err != nil {
+		t.Fatalf("disconnected device: %v", err)
 	}
-	if active.Name != "J-VIT" || active.UUID != "9379a045-40d0-4114-b2a6-451770aa9ebf" || active.Device != "wlan0" {
-		t.Errorf("active connection wrong: %+v", active)
+	if st.Device != "wlan0" || st.Active.Name != "" {
+		t.Errorf("expected no active connection, got %+v", st)
 	}
 
-	// Disconnected wifi device
-	outDisc := "wlan0:wifi:disconnected::\nlo:loopback:connected::\n"
-	dev, active = parseWifiDeviceStatus(outDisc)
-	if dev != "wlan0" {
-		t.Errorf("got device %q, want wlan0", dev)
+	if _, err := parseDeviceState("GENERAL.DEVICE:eth0\nGENERAL.TYPE:ethernet\n"); err == nil {
+		t.Error("non-wifi device should return an error")
 	}
-	if active.Name != "" {
-		t.Errorf("expected empty active connection, got %+v", active)
+	if _, err := parseDeviceState(""); err == nil {
+		t.Error("empty output should return an error")
 	}
 }
 

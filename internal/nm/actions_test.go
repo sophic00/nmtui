@@ -82,18 +82,31 @@ func TestListSavedSSIDLookupFailureKeepsProfile(t *testing.T) {
 	}
 }
 
+// connectCall returns the recorded connect invocation and its stdin.
+func connectCall(t *testing.T, runner *fakeRunner) ([]string, string) {
+	t.Helper()
+	for i, call := range runner.calls {
+		if strings.Contains(strings.Join(call, " "), "device wifi connect") {
+			return call, runner.stdins[i]
+		}
+	}
+	t.Fatal("no connect call recorded")
+	return nil, ""
+}
+
 func TestConnectSendsPasswordOnStdin(t *testing.T) {
 	runner := &fakeRunner{}
 	err := NewClientWithRunner(runner).Connect(context.Background(), "HomeNet", "s3cret", "wlan0")
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	call, stdin := connectCall(t, runner)
 	want := []string{"--ask", "--wait", connectWait, "device", "wifi", "connect", "HomeNet", "ifname", "wlan0"}
-	if !reflect.DeepEqual(runner.calls[0], want) {
-		t.Errorf("args = %q, want %q", runner.calls[0], want)
+	if !reflect.DeepEqual(call, want) {
+		t.Errorf("args = %q, want %q", call, want)
 	}
-	if runner.stdins[0] != "s3cret\n" {
-		t.Errorf("stdin = %q, want password followed by newline", runner.stdins[0])
+	if stdin != "s3cret\n" {
+		t.Errorf("stdin = %q, want password followed by newline", stdin)
 	}
 }
 
@@ -102,11 +115,144 @@ func TestConnectOpenNetwork(t *testing.T) {
 	if err := NewClientWithRunner(runner).Connect(context.Background(), "Open", "", ""); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	call, stdin := connectCall(t, runner)
 	want := []string{"--wait", connectWait, "device", "wifi", "connect", "Open"}
-	if !reflect.DeepEqual(runner.calls[0], want) {
-		t.Errorf("args = %q, want %q", runner.calls[0], want)
+	if !reflect.DeepEqual(call, want) {
+		t.Errorf("args = %q, want %q", call, want)
 	}
-	if runner.stdins[0] != "" {
-		t.Errorf("stdin = %q, want empty for open networks", runner.stdins[0])
+	if stdin != "" {
+		t.Errorf("stdin = %q, want empty for open networks", stdin)
+	}
+}
+
+func TestConnectRemovesProfileLeftByFailure(t *testing.T) {
+	listCalls := 0
+	runner := &fakeRunner{fn: func(args []string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.HasSuffix(joined, "connection show"):
+			listCalls++
+			if listCalls == 1 {
+				return "old-uuid:802-11-wireless:yes:Other\n", nil
+			}
+			return "old-uuid:802-11-wireless:yes:Other\nnew-uuid:802-11-wireless:yes:HomeNet\n", nil
+		case strings.Contains(joined, "device wifi connect"):
+			return "", fmt.Errorf("Error: Connection activation failed")
+		case joined == "connection delete new-uuid":
+			return "", nil
+		}
+		return "", fmt.Errorf("unexpected args: %q", args)
+	}}
+
+	err := NewClientWithRunner(runner).Connect(context.Background(), "HomeNet", "wrong", "wlan0")
+	if err == nil {
+		t.Fatal("expected connect failure")
+	}
+
+	deleted := false
+	for _, call := range runner.calls {
+		if strings.Join(call, " ") == "connection delete new-uuid" {
+			deleted = true
+		}
+	}
+	if !deleted {
+		t.Error("profile created by the failed attempt should be deleted")
+	}
+}
+
+func TestConnectKeepsPreexistingProfile(t *testing.T) {
+	profiles := "old-uuid:802-11-wireless:yes:HomeNet\n"
+	runner := &fakeRunner{fn: func(args []string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.HasSuffix(joined, "connection show"):
+			return profiles, nil
+		case strings.Contains(joined, "device wifi connect"):
+			return "", fmt.Errorf("Error: Connection activation failed")
+		}
+		return "", fmt.Errorf("unexpected args: %q", args)
+	}}
+
+	err := NewClientWithRunner(runner).Connect(context.Background(), "HomeNet", "wrong", "wlan0")
+	if err == nil {
+		t.Fatal("expected connect failure")
+	}
+	for _, call := range runner.calls {
+		if strings.HasPrefix(strings.Join(call, " "), "connection delete") {
+			t.Errorf("pre-existing profile must not be deleted: %q", call)
+		}
+	}
+}
+
+func TestGetWifiStateAutoDetectsDevice(t *testing.T) {
+	runner := &fakeRunner{fn: func(args []string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-t -f DEVICE,TYPE device status":
+			return "eth0:ethernet\nwlan0:wifi\n", nil
+		case "-t -f GENERAL.DEVICE,GENERAL.TYPE,GENERAL.STATE,GENERAL.CONNECTION,GENERAL.CON-UUID,IP4.ADDRESS device show wlan0":
+			return strings.Join([]string{
+				"GENERAL.DEVICE:wlan0",
+				"GENERAL.TYPE:wifi",
+				"GENERAL.CONNECTION:cube",
+				"GENERAL.CON-UUID:u1",
+				"IP4.ADDRESS[1]:10.0.0.2/24",
+			}, "\n"), nil
+		}
+		return "", fmt.Errorf("unexpected args: %q", args)
+	}}
+
+	st, err := NewClientWithRunner(runner).GetWifiState(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetWifiState: %v", err)
+	}
+	if st.Device != "wlan0" || st.Active.Name != "cube" || st.IP != "10.0.0.2/24" {
+		t.Errorf("auto-detected state wrong: %+v", st)
+	}
+}
+
+func TestGetWifiStateHonorsInterface(t *testing.T) {
+	runner := &fakeRunner{fn: func(args []string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "device show wlan1") {
+			return "GENERAL.DEVICE:wlan1\nGENERAL.TYPE:wifi\n", nil
+		}
+		return "", fmt.Errorf("unexpected args: %q", args)
+	}}
+
+	st, err := NewClientWithRunner(runner).GetWifiState(context.Background(), "wlan1")
+	if err != nil {
+		t.Fatalf("GetWifiState: %v", err)
+	}
+	if st.Device != "wlan1" {
+		t.Errorf("device = %q, want wlan1", st.Device)
+	}
+	// An explicit interface must not require the auto-detect call.
+	for _, call := range runner.calls {
+		if reflect.DeepEqual(call, []string{"-t", "-f", "DEVICE,TYPE", "device", "status"}) {
+			t.Error("explicit interface should skip device auto-detection")
+		}
+	}
+}
+
+func TestGetWifiStateRejectsNonWifiDevice(t *testing.T) {
+	runner := &fakeRunner{fn: func(args []string) (string, error) {
+		return "GENERAL.DEVICE:eth0\nGENERAL.TYPE:ethernet\n", nil
+	}}
+	_, err := NewClientWithRunner(runner).GetWifiState(context.Background(), "eth0")
+	if err == nil || !strings.Contains(err.Error(), "not a Wi-Fi device") {
+		t.Errorf("error = %v, want 'not a Wi-Fi device'", err)
+	}
+}
+
+func TestListAccessPointsPassesInterface(t *testing.T) {
+	runner := &fakeRunner{fn: func(args []string) (string, error) {
+		return "", nil
+	}}
+	_, err := NewClientWithRunner(runner).ListAccessPoints(context.Background(), false, "wlan0")
+	if err != nil {
+		t.Fatalf("ListAccessPoints: %v", err)
+	}
+	joined := strings.Join(runner.calls[0], " ")
+	if !strings.Contains(joined, "device wifi list ifname wlan0 --rescan no") {
+		t.Errorf("args = %q, want ifname and --rescan no", joined)
 	}
 }

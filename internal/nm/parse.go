@@ -1,6 +1,7 @@
 package nm
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,9 @@ func splitTerse(line string) []string {
 	return fields
 }
 
+// parseWifiList expects fields in the order requested by ListAccessPoints:
+// IN-USE,BSSID,MODE,CHAN,FREQ,RATE,SIGNAL,SECURITY,SSID. SSID is last because
+// it is the only field allowed to contain unescaped colons.
 func parseWifiList(out string) []AccessPoint {
 	var aps []AccessPoint
 
@@ -45,16 +49,20 @@ func parseWifiList(out string) []AccessPoint {
 			continue
 		}
 		f := splitTerse(line)
-		if len(f) < 7 {
+		if len(f) < 9 {
 			continue
 		}
-		sig, _ := strconv.Atoi(strings.TrimSpace(f[4]))
+		sig, _ := strconv.Atoi(strings.TrimSpace(f[6]))
 		aps = append(aps, AccessPoint{
 			InUse:    strings.TrimSpace(f[0]) == "*",
-			Chan:     strings.TrimSpace(f[2]),
+			BSSID:    strings.TrimSpace(f[1]),
+			Mode:     strings.TrimSpace(f[2]),
+			Chan:     strings.TrimSpace(f[3]),
+			Freq:     strings.TrimSpace(f[4]),
+			Rate:     strings.TrimSpace(f[5]),
 			Signal:   sig,
-			Security: strings.TrimSpace(f[5]),
-			SSID:     strings.Join(f[6:], ":"),
+			Security: strings.TrimSpace(f[7]),
+			SSID:     strings.Join(f[8:], ":"),
 		})
 	}
 
@@ -68,11 +76,17 @@ func parseWifiList(out string) []AccessPoint {
 	seen := make(map[string]bool, len(aps))
 	deduped := make([]AccessPoint, 0, len(aps))
 	for _, ap := range aps {
-		if ap.SSID != "" {
-			if seen[ap.SSID] {
+		key := ap.SSID
+		if key == "" {
+			// Hidden networks have no SSID; keep one row per BSSID so
+			// the same network is not listed repeatedly.
+			key = ap.BSSID
+		}
+		if key != "" {
+			if seen[key] {
 				continue
 			}
-			seen[ap.SSID] = true
+			seen[key] = true
 		}
 		deduped = append(deduped, ap)
 	}
@@ -117,28 +131,6 @@ func parseConnectionSSID(out string) string {
 	return ""
 }
 
-func parseActiveConnections(out string) []ActiveConnection {
-	var conns []ActiveConnection
-
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		f := splitTerse(line)
-		if len(f) < 4 {
-			continue
-		}
-		conns = append(conns, ActiveConnection{
-			UUID:   f[0],
-			Type:   f[1],
-			Device: f[2],
-			Name:   strings.Join(f[3:], ":"),
-		})
-	}
-	return conns
-}
-
 func parseRadioState(out string) bool {
 	return strings.TrimSpace(out) == "enabled"
 }
@@ -162,33 +154,48 @@ func parseGeneralStatus(out string) (state, connectivity string, wifiEnabled boo
 	return "", "", false
 }
 
-func parseWifiDeviceStatus(out string) (device string, active ActiveConnection) {
-	var firstDevice string
+// parseDeviceState parses `nmcli -t -f ... device show <iface>` output into a
+// WifiState. A non-Wi-Fi device is reported as an error so an invalid
+// --interface value surfaces clearly instead of silently showing nothing.
+func parseDeviceState(out string) (WifiState, error) {
+	var st WifiState
+	var devType, conName, conUUID string
 	for _, line := range strings.Split(out, "\n") {
 		f := splitTerse(strings.TrimSpace(line))
-		if len(f) >= 2 && f[1] == "wifi" {
-			dev := f[0]
-			if firstDevice == "" {
-				firstDevice = dev
+		if len(f) < 2 {
+			continue
+		}
+		switch f[0] {
+		case "GENERAL.DEVICE":
+			st.Device = f[1]
+		case "GENERAL.TYPE":
+			devType = f[1]
+		case "GENERAL.CONNECTION":
+			if f[1] != "" && f[1] != "--" {
+				conName = f[1]
 			}
-			var conName, conUUID string
-			if len(f) >= 4 && f[3] != "" && f[3] != "--" {
-				conName = f[3]
-			}
-			if len(f) >= 5 && f[4] != "" && f[4] != "--" {
-				conUUID = f[4]
-			}
-			if conName != "" {
-				return dev, ActiveConnection{
-					Device: dev,
-					Type:   "802-11-wireless",
-					Name:   conName,
-					UUID:   conUUID,
-				}
+		case "GENERAL.CON-UUID":
+			if f[1] != "" && f[1] != "--" {
+				conUUID = f[1]
 			}
 		}
 	}
-	return firstDevice, ActiveConnection{}
+	if st.Device == "" {
+		return WifiState{}, fmt.Errorf("device not found")
+	}
+	if devType != "" && devType != "wifi" {
+		return WifiState{}, fmt.Errorf("%s is not a Wi-Fi device", st.Device)
+	}
+	st.IP = parseDeviceIP(out)
+	if conName != "" {
+		st.Active = ActiveConnection{
+			Device: st.Device,
+			Type:   "802-11-wireless",
+			Name:   conName,
+			UUID:   conUUID,
+		}
+	}
+	return st, nil
 }
 
 func parseDeviceIP(out string) string {

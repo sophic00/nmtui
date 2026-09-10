@@ -3,7 +3,11 @@ package nm
 type AccessPoint struct {
 	InUse    bool
 	SSID     string
+	BSSID    string
+	Mode     string
 	Chan     string
+	Freq     string
+	Rate     string
 	Signal   int
 	Security string
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -45,6 +46,12 @@ type Model struct {
 	baseCtx      context.Context
 	baseCancel   context.CancelFunc
 	actionCancel context.CancelFunc
+
+	// applied tracks the newest request sequence applied per async stream, so
+	// responses from superseded requests cannot clobber newer state.
+	stateApplied int
+	apsApplied   int
+	savedApplied int
 
 	table    table.Model
 	spinner  spinner.Model
@@ -123,6 +130,13 @@ func pollCmd() tea.Cmd {
 	})
 }
 
+// requestSeq numbers asynchronous nmcli requests across the program so stale
+// responses (e.g. a cached scan arriving after a fresh rescan) are dropped
+// instead of overwriting newer state.
+var requestSeq atomic.Int64
+
+func nextRequestSeq() int { return int(requestSeq.Add(1)) }
+
 func (m Model) Init() tea.Cmd {
 	// Paint the list from NetworkManager's cached scan results immediately,
 	// then refresh it with a full rescan in the background so the UI is
@@ -141,6 +155,7 @@ type stateMsg struct {
 	status nm.Status
 	wifi   nm.WifiState
 	err    error
+	seq    int
 }
 
 type apsMsg struct {
@@ -149,11 +164,13 @@ type apsMsg struct {
 	// initial marks the startup cached-list load. The full rescan is still
 	// in flight, so busy must stay set until that lands.
 	initial bool
+	seq     int
 }
 
 type savedMsg struct {
 	conns []nm.SavedConnection
 	err   error
+	seq   int
 }
 
 type actionMsg struct {
@@ -167,28 +184,27 @@ func (m Model) refreshCmd(rescan bool) tea.Cmd {
 }
 
 func (m Model) stateCmd() tea.Cmd {
-	client, ctx, override := m.client, m.baseCtx, m.ifaceOverride
+	client, ctx, iface := m.client, m.baseCtx, m.ifaceOverride
+	seq := nextRequestSeq()
 	return func() tea.Msg {
 		st, err := client.GetStatus(ctx)
 		if err != nil {
-			return stateMsg{err: err}
+			return stateMsg{err: err, seq: seq}
 		}
-		w, err := client.GetWifiState(ctx)
+		w, err := client.GetWifiState(ctx, iface)
 		if err != nil {
-			return stateMsg{status: st, err: err}
+			return stateMsg{status: st, err: err, seq: seq}
 		}
-		if override != "" {
-			w.Device = override
-		}
-		return stateMsg{status: st, wifi: w}
+		return stateMsg{status: st, wifi: w, seq: seq}
 	}
 }
 
 func (m Model) apsCmd(rescan bool) tea.Cmd {
-	client, ctx := m.client, m.baseCtx
+	client, ctx, iface := m.client, m.baseCtx, m.ifaceOverride
+	seq := nextRequestSeq()
 	return func() tea.Msg {
-		aps, err := client.ListAccessPoints(ctx, rescan)
-		return apsMsg{aps: aps, err: err}
+		aps, err := client.ListAccessPoints(ctx, rescan, iface)
+		return apsMsg{aps: aps, err: err, seq: seq}
 	}
 }
 
@@ -196,18 +212,20 @@ func (m Model) apsCmd(rescan bool) tea.Cmd {
 // NetworkManager's cached results almost instantly. Used for the initial
 // paint while the full rescan runs in the background.
 func (m Model) apsCachedCmd() tea.Cmd {
-	client, ctx := m.client, m.baseCtx
+	client, ctx, iface := m.client, m.baseCtx, m.ifaceOverride
+	seq := nextRequestSeq()
 	return func() tea.Msg {
-		aps, err := client.ListAccessPoints(ctx, false)
-		return apsMsg{aps: aps, err: err, initial: true}
+		aps, err := client.ListAccessPoints(ctx, false, iface)
+		return apsMsg{aps: aps, err: err, initial: true, seq: seq}
 	}
 }
 
 func (m Model) savedCmd() tea.Cmd {
 	client, ctx := m.client, m.baseCtx
+	seq := nextRequestSeq()
 	return func() tea.Msg {
 		conns, err := client.ListSaved(ctx)
-		return savedMsg{conns: conns, err: err}
+		return savedMsg{conns: conns, err: err, seq: seq}
 	}
 }
 
@@ -375,6 +393,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case stateMsg:
+		if msg.seq != 0 && msg.seq <= m.stateApplied {
+			return m, nil
+		}
+		m.stateApplied = msg.seq
 		if msg.err != nil {
 			m.setErr(msg.err)
 		} else {
@@ -384,6 +406,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case apsMsg:
+		if msg.seq != 0 && msg.seq <= m.apsApplied {
+			return m, nil
+		}
+		m.apsApplied = msg.seq
 		if msg.err != nil {
 			if m.status.WifiEnabled && !strings.Contains(msg.err.Error(), "No Wi-Fi device found") {
 				m.setErr(msg.err)
@@ -399,6 +425,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case savedMsg:
+		if msg.seq != 0 && msg.seq <= m.savedApplied {
+			return m, nil
+		}
+		m.savedApplied = msg.seq
 		if msg.err != nil {
 			m.setErr(msg.err)
 		} else {
@@ -872,12 +902,18 @@ func (m Model) View() string {
 	}
 	header := titleStyle.Render("nmtui") +
 		"  " + dimStyle.Render("Wi-Fi:") + " " + wifiTxt
+	if m.wifi.Device != "" {
+		header += "  " + dimStyle.Render("iface:") + " " + m.wifi.Device
+	}
 	if m.wifi.Active.Name != "" {
 		conn := sanitizeSSID(m.wifi.Active.Name)
 		if m.wifi.IP != "" {
-			conn += " (" + m.wifi.IP + ")"
+			conn += " (" + ipOnly(m.wifi.IP) + ")"
 		}
 		header += "  " + dimStyle.Render("connected:") + " " + okStyle.Render(conn)
+		if c := connectivityNote(m.status.Connectivity); c != "" {
+			header += "  " + dimStyle.Render("· "+c)
+		}
 	}
 	b.WriteString(header + "\n\n")
 
@@ -968,6 +1004,25 @@ func onOffWord(on bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+// ipOnly drops the CIDR suffix nmcli reports (192.168.1.5/24).
+func ipOnly(ip string) string {
+	if i := strings.IndexByte(ip, '/'); i != -1 {
+		return ip[:i]
+	}
+	return ip
+}
+
+// connectivityNote labels degraded connectivity; "full" is the norm and
+// needs no note.
+func connectivityNote(connectivity string) string {
+	switch connectivity {
+	case "", "full", "unknown":
+		return ""
+	default:
+		return connectivity
+	}
 }
 
 func sanitizeSSID(s string) string {

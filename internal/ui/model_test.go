@@ -660,3 +660,67 @@ func TestCanceledActionStaysSilent(t *testing.T) {
 		t.Error("cancelled action should not schedule a refresh")
 	}
 }
+
+func TestStaleResponsesIgnored(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+
+	m2, _ := m.Update(apsMsg{aps: []nm.AccessPoint{{SSID: "Fresh", Signal: 90}}, seq: 5})
+	mod := m2.(Model)
+	m3, _ := mod.Update(apsMsg{aps: []nm.AccessPoint{{SSID: "Stale", Signal: 10}}, seq: 4})
+	mod3 := m3.(Model)
+	if len(mod3.aps) != 1 || mod3.aps[0].SSID != "Fresh" {
+		t.Errorf("stale apsMsg should be ignored, got %+v", mod3.aps)
+	}
+
+	m4, _ := mod3.Update(stateMsg{status: nm.Status{State: "connected"}, wifi: nm.WifiState{Device: "wlan0"}, seq: 9})
+	mod4 := m4.(Model)
+	m5, _ := mod4.Update(stateMsg{status: nm.Status{State: "disconnected"}, seq: 8})
+	mod5 := m5.(Model)
+	if mod5.status.State != "connected" {
+		t.Errorf("stale stateMsg should be ignored, got %q", mod5.status.State)
+	}
+
+	m6, _ := mod5.Update(savedMsg{conns: []nm.SavedConnection{{Name: "Fresh"}}, seq: 3})
+	mod6 := m6.(Model)
+	m7, _ := mod6.Update(savedMsg{conns: []nm.SavedConnection{{Name: "Stale"}}, seq: 2})
+	mod7 := m7.(Model)
+	if len(mod7.saved) != 1 || mod7.saved[0].Name != "Fresh" {
+		t.Errorf("stale savedMsg should be ignored, got %+v", mod7.saved)
+	}
+}
+
+func TestLateCachedScanDoesNotOverwriteRescan(t *testing.T) {
+	m := NewModel()
+	m.busy = "scanning"
+
+	// The fresh rescan (higher seq) lands first and clears busy.
+	m2, _ := m.Update(apsMsg{aps: []nm.AccessPoint{{SSID: "Fresh", Signal: 90}}, seq: 2})
+	mod := m2.(Model)
+	if mod.busy != "" {
+		t.Fatalf("rescan response should clear busy, got %q", mod.busy)
+	}
+
+	// The slower cached startup paint arrives afterwards and must not
+	// replace the fresh results.
+	m3, _ := mod.Update(apsMsg{aps: []nm.AccessPoint{{SSID: "Cached", Signal: 20}}, initial: true, seq: 1})
+	mod3 := m3.(Model)
+	if len(mod3.aps) != 1 || mod3.aps[0].SSID != "Fresh" {
+		t.Errorf("late cached scan overwrote fresh rescan: %+v", mod3.aps)
+	}
+}
+
+func TestIPOnlyAndConnectivityNote(t *testing.T) {
+	if got := ipOnly("192.168.1.5/24"); got != "192.168.1.5" {
+		t.Errorf("ipOnly with prefix = %q, want 192.168.1.5", got)
+	}
+	if got := ipOnly("10.0.0.1"); got != "10.0.0.1" {
+		t.Errorf("ipOnly without prefix = %q, want 10.0.0.1", got)
+	}
+	if connectivityNote("full") != "" || connectivityNote("unknown") != "" {
+		t.Error("full/unknown connectivity should not be annotated")
+	}
+	if got := connectivityNote("limited"); got != "limited" {
+		t.Errorf("connectivityNote(limited) = %q, want limited", got)
+	}
+}

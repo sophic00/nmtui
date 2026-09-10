@@ -107,8 +107,6 @@ func FormatMbps(m float64) string {
 	switch {
 	case m >= 1000:
 		return fmt.Sprintf("%.2f Gbps", m/1000)
-	case m >= 100:
-		return fmt.Sprintf("%.1f Mbps", m)
 	case m >= 10:
 		return fmt.Sprintf("%.1f Mbps", m)
 	default:

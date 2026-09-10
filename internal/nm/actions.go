@@ -23,40 +23,46 @@ func (c *Client) GetStatus(ctx context.Context) (Status, error) {
 	}, nil
 }
 
-func (c *Client) GetWifiState(ctx context.Context) (WifiState, error) {
-	devOut, err := c.run(ctx, defaultTimeout, "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION,CON-UUID", "device", "status")
+// GetWifiState returns the state of iface. When iface is empty the first
+// Wi-Fi device reported by NetworkManager is used.
+func (c *Client) GetWifiState(ctx context.Context, iface string) (WifiState, error) {
+	if iface == "" {
+		out, err := c.run(ctx, defaultTimeout, "-t", "-f", "DEVICE,TYPE", "device", "status")
+		if err != nil {
+			return WifiState{}, err
+		}
+		iface = parseWifiDevice(out)
+	}
+	if iface == "" {
+		return WifiState{}, nil
+	}
+
+	out, err := c.run(ctx, defaultTimeout, "-t", "-f",
+		"GENERAL.DEVICE,GENERAL.TYPE,GENERAL.STATE,GENERAL.CONNECTION,GENERAL.CON-UUID,IP4.ADDRESS",
+		"device", "show", iface)
 	if err != nil {
 		return WifiState{}, err
 	}
-
-	dev, active := parseWifiDeviceStatus(devOut)
-	st := WifiState{
-		Device: dev,
-		Active: active,
-	}
-	if st.Device == "" {
-		return st, nil
-	}
-
-	if st.Active.Name != "" {
-		ipOut, err := c.run(ctx, defaultTimeout, "-t", "-f", "IP4.ADDRESS", "device", "show", st.Device)
-		if err == nil {
-			st.IP = parseDeviceIP(ipOut)
-		}
-	}
-	return st, nil
+	return parseDeviceState(out)
 }
 
-func (c *Client) ListAccessPoints(ctx context.Context, rescan bool) ([]AccessPoint, error) {
+func (c *Client) ListAccessPoints(ctx context.Context, rescan bool, iface string) ([]AccessPoint, error) {
 	rescanFlag := "no"
 	timeout := defaultTimeout
 	if rescan {
 		rescanFlag = "yes"
 		timeout = scanTimeout
 	}
-	out, err := c.run(ctx, timeout,
-		"-t", "-f", "IN-USE,MODE,CHAN,RATE,SIGNAL,SECURITY,SSID",
-		"device", "wifi", "list", "--rescan", rescanFlag)
+	args := []string{
+		"-t", "-f", "IN-USE,BSSID,MODE,CHAN,FREQ,RATE,SIGNAL,SECURITY,SSID",
+		"device", "wifi", "list",
+	}
+	if iface != "" {
+		args = append(args, "ifname", iface)
+	}
+	args = append(args, "--rescan", rescanFlag)
+
+	out, err := c.run(ctx, timeout, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -64,13 +70,41 @@ func (c *Client) ListAccessPoints(ctx context.Context, rescan bool) ([]AccessPoi
 }
 
 func (c *Client) ListSaved(ctx context.Context) ([]SavedConnection, error) {
+	conns, err := c.listProfiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.resolveSavedSSIDs(ctx, conns)
+	return conns, nil
+}
+
+// listProfiles lists saved connections without resolving their SSIDs.
+func (c *Client) listProfiles(ctx context.Context) ([]SavedConnection, error) {
 	out, err := c.run(ctx, defaultTimeout, "-t", "-f", "UUID,TYPE,AUTOCONNECT,NAME", "connection", "show")
 	if err != nil {
 		return nil, err
 	}
-	conns := parseSavedConnections(out)
-	c.resolveSavedSSIDs(ctx, conns)
-	return conns, nil
+	return parseSavedConnections(out), nil
+}
+
+// removeNewProfiles deletes profiles named after ssid that appeared since the
+// snapshot, i.e. ones a failed connect attempt left behind. Pre-existing
+// profiles are never touched.
+func (c *Client) removeNewProfiles(ctx context.Context, ssid string, before []SavedConnection) {
+	after, err := c.listProfiles(ctx)
+	if err != nil {
+		return
+	}
+	known := make(map[string]bool, len(before))
+	for _, conn := range before {
+		known[conn.UUID] = true
+	}
+	for _, conn := range after {
+		if known[conn.UUID] || conn.Name != ssid {
+			continue
+		}
+		_, _ = c.run(ctx, defaultTimeout, "connection", "delete", conn.UUID)
+	}
 }
 
 // resolveSavedSSIDs fills in each profile's wireless SSID. Profile names can
@@ -111,6 +145,10 @@ func (c *Client) ToggleWifi(ctx context.Context, enable bool) error {
 }
 
 func (c *Client) Connect(ctx context.Context, ssid, password, device string) error {
+	// Snapshot saved profiles before connecting so a failed attempt can
+	// remove only the profile nmcli created, never a pre-existing one.
+	before, beforeErr := c.listProfiles(ctx)
+
 	var args []string
 	var stdin string
 
@@ -126,6 +164,9 @@ func (c *Client) Connect(ctx context.Context, ssid, password, device string) err
 	}
 
 	_, err := c.runWithStdin(ctx, connectTimeout, stdin, args...)
+	if err != nil && beforeErr == nil {
+		c.removeNewProfiles(ctx, ssid, before)
+	}
 	return err
 }
 
