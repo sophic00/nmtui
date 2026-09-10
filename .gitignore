@@ -1,5 +1,6 @@
 /nmt
 /nmtui
+/bin/
 /result
 /result-*
 /.direnv/

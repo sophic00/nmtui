@@ -1,12 +1,16 @@
-BINARY := nmtui
+BIN_DIR := bin
+BINARY := $(BIN_DIR)/nmt
+VERSION ?= $(shell cat VERSION 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
 PREFIX ?= /usr/local
+MANDIR ?= $(PREFIX)/share/man/man1
 
-.PHONY: all build test test-race vet fmt fmt-check lint check coverage run install clean
+.PHONY: all build test test-race vet fmt fmt-check lint check coverage run install man clean
 
 all: build
 
 build:
-	go build -trimpath -o $(BINARY) .
+	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
 test:
 	go test ./...
@@ -42,10 +46,13 @@ coverage:
 	go tool cover -func=coverage.out | tail -1
 
 run:
-	go run .
+	go run . $(ARGS)
 
-install: build
-	install -Dm755 $(BINARY) $(DESTDIR)$(PREFIX)/bin/$(BINARY)
+man:
+	install -Dm644 docs/nmt.1 $(DESTDIR)$(MANDIR)/nmt.1
+
+install: build man
+	install -Dm755 $(BINARY) $(DESTDIR)$(PREFIX)/bin/nmt
 
 clean:
-	rm -f $(BINARY) coverage.out
+	rm -rf $(BIN_DIR) coverage.out

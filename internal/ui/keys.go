@@ -101,7 +101,7 @@ func wrapParts(parts []string, width int) []string {
 }
 
 // helpParts returns the main-view help segments, unwrapped.
-func helpParts(width int) []string {
+func helpParts() []string {
 	parts := make([]string, 0, len(mainBindings))
 	for _, b := range mainBindings {
 		h := b.Help()
@@ -111,7 +111,7 @@ func helpParts(width int) []string {
 }
 
 func helpLines(width int) []string {
-	return bindingLines(mainBindings, width)
+	return wrapParts(helpParts(), width)
 }
 
 func savedHelpLines(width int) []string {

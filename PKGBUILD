@@ -1,7 +1,7 @@
 # Maintainer: Vaibhav Sijaria <139199971+sophic00@users.noreply.github.com>
 
 pkgname=nmt
-pkgver=0.3.2
+pkgver=$(<"$startdir/VERSION")
 pkgrel=1
 pkgdesc="Terminal UI for managing Wi-Fi with NetworkManager"
 arch=('x86_64' 'aarch64')
@@ -17,7 +17,7 @@ build() {
   export CGO_ENABLED=0
   export GOFLAGS='-buildmode=pie -mod=readonly -trimpath'
   export GOTOOLCHAIN=local
-  go build -o "$pkgname" .
+  go build -ldflags "-X main.version=$pkgver" -o "$pkgname" .
 }
 
 check() {
@@ -32,4 +32,5 @@ package() {
   cd "$pkgname"
   install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 docs/nmt.1 "$pkgdir/usr/share/man/man1/nmt.1"
 }

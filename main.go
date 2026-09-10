@@ -19,7 +19,8 @@ import (
 	"nmtui/internal/ui"
 )
 
-var version = "0.3.2"
+// version is injected at build time via -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))

@@ -29,6 +29,47 @@ func TestSplitTerse(t *testing.T) {
 	}
 }
 
+// escapeTerse is the inverse of splitTerse, used by the fuzz round-trip test.
+func escapeTerse(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, ":", `\:`)
+}
+
+func FuzzSplitTerse(f *testing.F) {
+	f.Add("a:b:c")
+	f.Add(`my\:net:x`)
+	f.Add(`a\\:b`)
+	f.Add("::")
+	f.Add(`trailing\`)
+	f.Add("")
+
+	f.Fuzz(func(t *testing.T, line string) {
+		fields := splitTerse(line)
+		if len(fields) == 0 {
+			t.Fatalf("splitTerse(%q) returned no fields", line)
+		}
+		// Escaping every field and re-splitting must round-trip. The terse
+		// format is the only nmcli output format we parse, so this property
+		// guards against regressions in the escaping rules.
+		var b strings.Builder
+		for i, field := range fields {
+			if i > 0 {
+				b.WriteByte(':')
+			}
+			b.WriteString(escapeTerse(field))
+		}
+		got := splitTerse(b.String())
+		if len(got) != len(fields) {
+			t.Fatalf("round-trip of %q: got %q, want %q", line, got, fields)
+		}
+		for i := range got {
+			if got[i] != fields[i] {
+				t.Fatalf("round-trip of %q: got %q, want %q", line, got, fields)
+			}
+		}
+	})
+}
+
 func TestParseWifiList(t *testing.T) {
 	out := strings.Join([]string{
 		` :FC\:0A\:81\:DD\:62\:30:Infra:11:2462 MHz:195 Mbit/s:44:WPA2:Weak Signal`,

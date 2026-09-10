@@ -1,4 +1,6 @@
-# nmtui
+# nmt
+
+[![ci](https://github.com/sophic00/nmtui/actions/workflows/ci.yml/badge.svg)](https://github.com/sophic00/nmtui/actions/workflows/ci.yml)
 
 A terminal UI for managing Wi-Fi with NetworkManager, built with
 [bubbletea](https://github.com/charmbracelet/bubbletea).
@@ -36,7 +38,15 @@ A terminal UI for managing Wi-Fi with NetworkManager, built with
 ## Build
 
 ```sh
-go build -o nmtui .
+go build -o bin/nmt .
+```
+
+Or use the Makefile, which injects the version from `VERSION` and has targets
+for building, installing (with the man page) and checking:
+
+```sh
+make build            # binary at ./bin/nmt
+make install          # to /usr/local/bin/nmt
 ```
 
 ### Reproducible build with Nix
@@ -45,7 +55,7 @@ go build -o nmtui .
 build uses an identical dependency set regardless of the host system:
 
 ```sh
-nix build             # binary at ./result/bin/nmtui
+nix build             # binary at ./result/bin/nmt
 nix flake check       # builds the package and runs the test suite in the sandbox
 nix run .             # run the TUI straight from the flake
 ```
@@ -63,12 +73,12 @@ make build            # or: make check (vet + tests), make run, make install
 ## Usage
 
 ```sh
-./nmtui [flags]        # TUI
-./nmtui status [--json]
-./nmtui list [--json] [--rescan] [--interface <name>]
-./nmtui speedtest [--json] [--quick] [--server <url>] [--duration <d>] [--streams <n>]
-./nmtui version
-./nmtui help
+nmt [flags]        # TUI
+nmt status [--json]
+nmt list [--json] [--rescan] [--interface <name>]
+nmt speedtest [--json] [--quick] [--server <url>] [--duration <d>] [--streams <n>]
+nmt version
+nmt help
 ```
 
 ### Flags
@@ -85,9 +95,9 @@ make build            # or: make check (vet + tests), make run, make install
 for scripts:
 
 ```sh
-nmtui status --json | jq -r .connection
-nmtui list --json | jq -r '.[] | select(.in_use) | .ssid'
-nmtui speedtest --quick --json
+nmt status --json | jq -r .connection
+nmt list --json | jq -r '.[] | select(.in_use) | .ssid'
+nmt speedtest --quick --json
 ```
 
 ### Keybindings

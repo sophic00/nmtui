@@ -1,0 +1,173 @@
+.TH NMT 1 "2026-09-10" "nmt 0.3.2" "User Commands"
+.SH NAME
+nmt \- terminal UI for managing Wi-Fi with NetworkManager
+.SH SYNOPSIS
+.B nmt
+.RI [ flags ]
+.br
+.B nmt status
+.RB [ \-\-json ]
+.br
+.B nmt list
+.RB [ \-\-json ]
+.RB [ \-\-rescan ]
+.RB [ \-\-interface
+.IR name ]
+.br
+.B nmt speedtest
+.RB [ \-\-json ]
+.RB [ \-\-quick ]
+.RB [ \-\-server
+.IR url ]
+.RB [ \-\-duration
+.IR d ]
+.RB [ \-\-streams
+.IR n ]
+.br
+.B nmt version
+.br
+.B nmt help
+.SH DESCRIPTION
+.B nmt
+is a terminal user interface for managing Wi-Fi connections through
+NetworkManager. It lists nearby networks, connects to them (reusing saved
+profiles), forgets profiles, toggles the radio, runs a speed test and manages
+saved networks.
+.PP
+Without arguments it runs the interactive TUI. The
+.BR status ,
+.B list
+and
+.B speedtest
+subcommands run headlessly and support
+.B \-\-json
+output for scripting.
+.SH OPTIONS
+TUI flags:
+.TP
+.BR \-i ", " \-\-interface " " \fIname\fR
+Wi-Fi interface to manage (for example
+.IR wlan0 ).
+The interface can also be switched at runtime in the TUI.
+.TP
+.BR \-v ", " \-\-version
+Print version information and exit.
+.TP
+.BR \-h ", " \-\-help
+Show help information and exit.
+.TP
+.B \-\-json
+(status, list, speedtest) Print machine-readable JSON instead of text.
+.TP
+.B \-\-rescan
+(list) Force a network scan before listing.
+.TP
+.B \-\-quick
+(speedtest) Run the short variant: 5s download + 5s upload with 2 streams.
+.TP
+.BR \-\-server " " \fIurl\fR
+(speedtest) Base URL of the speed test server. The default is
+.IR https://speed.cloudflare.com .
+.TP
+.BR \-\-duration " " \fId\fR
+(speedtest) Duration of each phase, for example
+.IR 5s .
+.TP
+.BR \-\-streams " " \fIn\fR
+(speedtest) Number of parallel streams.
+.SH TUI KEYBINDINGS
+.TP
+.B up/k, down/j
+Navigate networks.
+.TP
+.B enter
+Connect to the selected network.
+.TP
+.B r
+Rescan.
+.TP
+.B t
+Toggle the Wi-Fi radio.
+.TP
+.B d
+Disconnect the current network.
+.TP
+.B f
+Forget the selected network's saved profile.
+.TP
+.B i
+Show network details (BSSID, channel, frequency, rate, mode, security).
+.TP
+.B o
+Cycle the sort order: signal, name, channel, security.
+.TP
+.B F
+Open the saved networks view (connect, autoconnect, password, forget).
+.TP
+.B h
+Connect to a hidden network by SSID.
+.TP
+.B D
+Switch the managed Wi-Fi device when there are several.
+.TP
+.B /
+Filter the network list.
+.TP
+.B s
+Run a speed test against the active connection.
+.TP
+.B S
+Run a quick speed test.
+.TP
+.B ctrl+r
+Show or hide the password at the password prompt.
+.TP
+.B esc
+Clear the filter, dismiss a message, or cancel a pending action.
+.TP
+.BR q " / " ctrl+c
+Quit.
+.SH CONFIGURATION
+Configuration is read from
+.I $XDG_CONFIG_HOME/nmt/config
+(usually
+.IR ~/.config/nmt/config ).
+The format is
+.IR "key = value" ;
+.B #
+starts a comment. Supported keys:
+.IR interface ,
+.IR poll_interval ,
+.IR sort " (signal, name, channel, security),"
+.IR speedtest_server ,
+.IR speedtest_duration ,
+.IR speedtest_streams " and"
+.IR speedtest_quick .
+Unknown keys and invalid values are ignored with a warning.
+.PP
+Precedence: command-line flags, then environment variables, then the config
+file, then built-in defaults.
+.SH ENVIRONMENT
+.TP
+.B NMT_CONFIG
+Path to the configuration file.
+.TP
+.B NMT_INTERFACE
+Default Wi-Fi interface.
+.TP
+.B NMT_POLL_INTERVAL
+Status polling interval (for example
+.IR 5s ).
+.TP
+.B NMT_SPEEDTEST_SERVER
+Default speed test server URL.
+.SH FILES
+.TP
+.I ~/.config/nmt/config
+User configuration.
+.SH EXIT STATUS
+.B nmt
+exits with 0 on success, 1 on runtime errors and 2 on usage errors.
+.SH SEE ALSO
+.BR nmcli (1),
+.BR NetworkManager (8)
