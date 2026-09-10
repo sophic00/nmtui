@@ -890,3 +890,74 @@ func TestMouseWheelScrollsTable(t *testing.T) {
 		t.Errorf("wheel in details mode should be ignored, got cursor %d", got)
 	}
 }
+
+func TestSavedViewFlow(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.saved = []nm.SavedConnection{
+		{Name: "Home Profile", SSID: "HOME-5G", UUID: "u1", Type: "802-11-wireless", Autoconnect: "yes"},
+		{Name: "cube", SSID: "cube", UUID: "u2", Type: "802-11-wireless", Autoconnect: "no"},
+	}
+	m.rebuildSavedTable()
+
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	mod := m2.(Model)
+	if mod.mode != modeSaved {
+		t.Fatalf("F should open the saved view, got mode %v", mod.mode)
+	}
+	if rows := mod.savedTable.Rows(); len(rows) != 2 || rows[0][0] != "Home Profile" || rows[1][2] != "no" {
+		t.Errorf("saved table rows wrong: %+v", rows)
+	}
+
+	// a toggles autoconnect and emits a command.
+	m3, cmd := mod.updateSaved(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	mod3 := m3.(Model)
+	if cmd == nil || !strings.Contains(mod3.busy, "autoconnect") {
+		t.Errorf("a should toggle autoconnect: cmd=%v busy=%q", cmd, mod3.busy)
+	}
+
+	// f opens a confirm that returns to the saved view.
+	mod3.busy = ""
+	m4, _ := mod3.updateSaved(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	mod4 := m4.(Model)
+	if mod4.mode != modeConfirm || mod4.confirmReturn != modeSaved {
+		t.Fatalf("f should confirm forget in saved mode: mode=%v return=%v", mod4.mode, mod4.confirmReturn)
+	}
+	m5, _ := mod4.updateConfirm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if m5.(Model).mode != modeSaved {
+		t.Errorf("declining forget should return to saved view, got mode %v", m5.(Model).mode)
+	}
+
+	// enter activates the profile.
+	m6, cmd := mod3.updateSaved(tea.KeyMsg{Type: tea.KeyEnter})
+	mod6 := m6.(Model)
+	if cmd == nil || !strings.Contains(mod6.busy, "connecting") {
+		t.Errorf("enter should activate profile: cmd=%v busy=%q", cmd, mod6.busy)
+	}
+	mod6.shutdown()
+}
+
+func TestSavedViewEditPassword(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.saved = []nm.SavedConnection{{Name: "cube", SSID: "cube", UUID: "u2", Type: "802-11-wireless"}}
+	m.rebuildSavedTable()
+	m.mode = modeSaved
+
+	m2, _ := m.updateSaved(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	mod := m2.(Model)
+	if mod.mode != modePassword || mod.pwdPurpose != pwdEditPassword {
+		t.Fatalf("e should open the password editor: mode=%v purpose=%v", mod.mode, mod.pwdPurpose)
+	}
+	mod.pwdInput.SetValue("newpass")
+
+	m3, cmd := mod.updatePassword(tea.KeyMsg{Type: tea.KeyEnter})
+	mod3 := m3.(Model)
+	if mod3.mode != modeSaved {
+		t.Errorf("saving a password should return to saved view, got mode %v", mod3.mode)
+	}
+	if cmd == nil || mod3.busy == "" {
+		t.Errorf("saving should emit a modify command: cmd=%v busy=%q", cmd, mod3.busy)
+	}
+	mod3.shutdown()
+}

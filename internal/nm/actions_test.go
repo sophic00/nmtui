@@ -243,6 +243,39 @@ func TestGetWifiStateRejectsNonWifiDevice(t *testing.T) {
 	}
 }
 
+func TestSavedProfileActions(t *testing.T) {
+	runner := &fakeRunner{}
+	c := NewClientWithRunner(runner)
+
+	if err := c.ActivateConnection(context.Background(), "uuid-1"); err != nil {
+		t.Fatalf("ActivateConnection: %v", err)
+	}
+	if err := c.SetAutoconnect(context.Background(), "uuid-1", true); err != nil {
+		t.Fatalf("SetAutoconnect(true): %v", err)
+	}
+	if err := c.SetAutoconnect(context.Background(), "uuid-1", false); err != nil {
+		t.Fatalf("SetAutoconnect(false): %v", err)
+	}
+	if err := c.ModifyPassword(context.Background(), "uuid-1", "s3cret"); err != nil {
+		t.Fatalf("ModifyPassword: %v", err)
+	}
+
+	want := [][]string{
+		{"--wait", connectWait, "connection", "up", "uuid-1"},
+		{"connection", "modify", "uuid-1", "connection.autoconnect", "yes"},
+		{"connection", "modify", "uuid-1", "connection.autoconnect", "no"},
+		{"connection", "modify", "uuid-1", "802-11-wireless-security.psk", "s3cret"},
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("got %d calls, want %d: %q", len(runner.calls), len(want), runner.calls)
+	}
+	for i, w := range want {
+		if !reflect.DeepEqual(runner.calls[i], w) {
+			t.Errorf("call %d = %q, want %q", i, runner.calls[i], w)
+		}
+	}
+}
+
 func TestListAccessPointsPassesInterface(t *testing.T) {
 	runner := &fakeRunner{fn: func(args []string) (string, error) {
 		return "", nil

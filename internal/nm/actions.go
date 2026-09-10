@@ -175,6 +175,29 @@ func (c *Client) Disconnect(ctx context.Context, device string) error {
 	return err
 }
 
+// ActivateConnection brings up a saved profile by UUID.
+func (c *Client) ActivateConnection(ctx context.Context, uuid string) error {
+	_, err := c.run(ctx, connectTimeout, "--wait", connectWait, "connection", "up", uuid)
+	return err
+}
+
+func (c *Client) SetAutoconnect(ctx context.Context, uuid string, enabled bool) error {
+	value := "no"
+	if enabled {
+		value = "yes"
+	}
+	_, err := c.run(ctx, defaultTimeout, "connection", "modify", uuid, "connection.autoconnect", value)
+	return err
+}
+
+// ModifyPassword replaces the stored Wi-Fi password for a profile. nmcli does
+// not prompt for modify values, so the password is passed as an argument; it
+// is briefly visible in the process list.
+func (c *Client) ModifyPassword(ctx context.Context, uuid, password string) error {
+	_, err := c.run(ctx, defaultTimeout, "connection", "modify", uuid, "802-11-wireless-security.psk", password)
+	return err
+}
+
 func (c *Client) Forget(ctx context.Context, id string) error {
 	_, err := c.run(ctx, defaultTimeout, "connection", "delete", id)
 	return err

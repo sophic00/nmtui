@@ -29,6 +29,14 @@ const (
 	modeConfirm
 	modeSpeedtest
 	modeDetails
+	modeSaved
+)
+
+type pwdPurpose int
+
+const (
+	pwdConnect pwdPurpose = iota
+	pwdEditPassword
 )
 
 type sortMode int
@@ -79,19 +87,23 @@ type Model struct {
 	apsApplied   int
 	savedApplied int
 
-	table    table.Model
-	spinner  spinner.Model
-	pwdInput textinput.Model
-	filter   textinput.Model
+	table      table.Model
+	savedTable table.Model
+	spinner    spinner.Model
+	pwdInput   textinput.Model
+	filter     textinput.Model
 
 	mode          mode
 	confirm       confirmKind
+	confirmReturn mode
+	pwdPurpose    pwdPurpose
 	busy          string
 	info          string
 	warnMsg       string
 	errMsg        string
 	filtering     bool
 	connectSSID   string
+	editConn      nm.SavedConnection
 	detailAP      nm.AccessPoint
 	sort          sortMode
 	pendingForget nm.SavedConnection
@@ -124,6 +136,16 @@ func NewModelWithDevice(device string) Model {
 		table.WithHeight(10),
 	)
 
+	saved := table.New(
+		table.WithColumns([]table.Column{
+			{Title: "NAME", Width: 24},
+			{Title: "SSID", Width: 28},
+			{Title: "AUTOCONNECT", Width: 12},
+		}),
+		table.WithFocused(true),
+		table.WithHeight(10),
+	)
+
 	pwd := textinput.New()
 	pwd.EchoMode = textinput.EchoPassword
 	pwd.Placeholder = "password"
@@ -140,6 +162,7 @@ func NewModelWithDevice(device string) Model {
 		baseCtx:       ctx,
 		baseCancel:    cancel,
 		table:         t,
+		savedTable:    saved,
 		spinner:       spinner.New(spinner.WithSpinner(spinner.Dot)),
 		pwdInput:      pwd,
 		filter:        f,
@@ -298,6 +321,40 @@ func (m Model) forgetCmd(ctx context.Context, id, name string) tea.Cmd {
 			return actionMsg{err: err}
 		}
 		return actionMsg{info: "forgot " + name}
+	}
+}
+
+func (m Model) activateSavedCmd(ctx context.Context, uuid, name string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if err := client.ActivateConnection(ctx, uuid); err != nil {
+			return actionMsg{err: fmt.Errorf("connect to %q failed: %w", name, err)}
+		}
+		return actionMsg{info: "connected to " + name, rescan: true}
+	}
+}
+
+func (m Model) autoconnectCmd(ctx context.Context, uuid, name string, enable bool) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if err := client.SetAutoconnect(ctx, uuid, enable); err != nil {
+			return actionMsg{err: err}
+		}
+		state := "disabled"
+		if enable {
+			state = "enabled"
+		}
+		return actionMsg{info: "autoconnect " + state + " for " + name}
+	}
+}
+
+func (m Model) modifyPasswordCmd(ctx context.Context, uuid, name, password string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if err := client.ModifyPassword(ctx, uuid, password); err != nil {
+			return actionMsg{err: fmt.Errorf("update password for %q failed: %w", name, err)}
+		}
+		return actionMsg{info: "password updated for " + name}
 	}
 }
 
@@ -465,6 +522,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setErr(msg.err)
 		} else {
 			m.saved = msg.conns
+			m.rebuildSavedTable()
 		}
 		return m, nil
 
@@ -539,6 +597,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateSpeedtest(msg)
 	case modeDetails:
 		return m.updateDetails(msg)
+	case modeSaved:
+		return m.updateSaved(msg)
 	default:
 		return m.updateList(msg)
 	}
@@ -610,7 +670,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// A mutating action is in flight. Allow scrolling the table
 			// while busy, but block mutating actions.
 			switch msg.String() {
-			case "r", "t", "d", "f", "s", "S", "enter":
+			case "r", "t", "d", "f", "s", "S", "enter", "F":
 				return m, nil
 			}
 			var cmd tea.Cmd
@@ -682,6 +742,12 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setInfo("sorted by " + m.sort.String())
 		return m, nil
 
+	case "F":
+		m.mode = modeSaved
+		m.rebuildSavedTable()
+		m.layout()
+		return m, nil
+
 	case "s", "S":
 		if m.wifi.Active.Name == "" {
 			m.setWarn("not connected — join a network first")
@@ -727,11 +793,27 @@ func (m Model) startConnect(ap nm.AccessPoint) (tea.Model, tea.Cmd) {
 func (m Model) updatePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
+		if m.pwdPurpose == pwdEditPassword {
+			m.mode = modeSaved
+			m.pwdPurpose = pwdConnect
+			m.pwdInput.Reset()
+			return m, nil
+		}
 		m.mode = modeList
 		m.pwdInput.Reset()
 		return m, nil
 	case "enter":
 		pw := m.pwdInput.Value()
+		if m.pwdPurpose == pwdEditPassword {
+			conn := m.editConn
+			name := savedDisplayName(conn)
+			m.mode = modeSaved
+			m.pwdPurpose = pwdConnect
+			m.busy = "updating password for " + name
+			m.setInfo("")
+			ctx := m.beginAction()
+			return m, tea.Batch(m.modifyPasswordCmd(ctx, conn.UUID, name, pw), m.spinner.Tick)
+		}
 		ssid := m.connectSSID
 		m.mode = modeList
 		m.busy = "connecting to " + ssid
@@ -752,9 +834,14 @@ func (m Model) updatePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	ret := m.confirmReturn
+	if ret == 0 {
+		ret = modeList
+	}
 	switch msg.String() {
 	case "y", "Y":
-		m.mode = modeList
+		m.mode = ret
+		m.confirmReturn = modeList
 		switch m.confirm {
 		case confirmForget:
 			id, name := m.pendingForget.UUID, m.pendingForget.Name
@@ -771,7 +858,8 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "n", "N", "esc":
-		m.mode = modeList
+		m.mode = ret
+		m.confirmReturn = modeList
 		m.confirm = confirmNone
 		return m, nil
 	}
@@ -823,6 +911,122 @@ func (m Model) updateDetails(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+func (m Model) updateSaved(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// While a mutating action is in flight, esc cancels it and other actions
+	// are blocked; navigation still works.
+	if m.busy != "" && m.busy != "scanning" {
+		switch msg.String() {
+		case "esc":
+			if m.actionCancel != nil {
+				m.actionCancel()
+				m.actionCancel = nil
+			}
+			return m, nil
+		case "enter", "a", "e", "f", "r", "F":
+			return m, nil
+		}
+	}
+
+	switch msg.String() {
+	case "esc", "F":
+		m.mode = modeList
+		m.layout()
+		return m, nil
+	case "q":
+		m.shutdown()
+		return m, tea.Quit
+	case "up", "k":
+		m.savedTable.MoveUp(1)
+		return m, nil
+	case "down", "j":
+		m.savedTable.MoveDown(1)
+		return m, nil
+	case "r":
+		return m, m.savedCmd()
+	case "enter":
+		conn := m.selectedSaved()
+		if conn == nil {
+			m.setWarn("no saved network selected")
+			return m, nil
+		}
+		name := savedDisplayName(*conn)
+		m.busy = "connecting to " + name
+		m.setInfo("")
+		ctx := m.beginAction()
+		return m, m.activateSavedCmd(ctx, conn.UUID, name)
+	case "a":
+		conn := m.selectedSaved()
+		if conn == nil {
+			m.setWarn("no saved network selected")
+			return m, nil
+		}
+		name := savedDisplayName(*conn)
+		enable := conn.Autoconnect != "yes"
+		m.busy = "updating autoconnect for " + name
+		m.setInfo("")
+		ctx := m.beginAction()
+		return m, m.autoconnectCmd(ctx, conn.UUID, name, enable)
+	case "e":
+		conn := m.selectedSaved()
+		if conn == nil {
+			m.setWarn("no saved network selected")
+			return m, nil
+		}
+		m.mode = modePassword
+		m.pwdPurpose = pwdEditPassword
+		m.editConn = *conn
+		m.pwdInput.Reset()
+		return m, m.pwdInput.Focus()
+	case "f":
+		conn := m.selectedSaved()
+		if conn == nil {
+			m.setWarn("no saved network selected")
+			return m, nil
+		}
+		m.mode = modeConfirm
+		m.confirm = confirmForget
+		m.confirmReturn = modeSaved
+		m.pendingForget = *conn
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) selectedSaved() *nm.SavedConnection {
+	i := m.savedTable.Cursor()
+	if i >= 0 && i < len(m.saved) {
+		return &m.saved[i]
+	}
+	return nil
+}
+
+func savedDisplayName(c nm.SavedConnection) string {
+	if c.SSID != "" {
+		return c.SSID
+	}
+	return c.Name
+}
+
+func (m *Model) rebuildSavedTable() {
+	rows := make([]table.Row, 0, len(m.saved))
+	for _, c := range m.saved {
+		name := sanitizeSSID(c.Name)
+		ssid := sanitizeSSID(c.SSID)
+		if ssid == "" {
+			ssid = "(unknown)"
+		}
+		auto := "yes"
+		if c.Autoconnect != "yes" {
+			auto = "no"
+		}
+		rows = append(rows, table.Row{name, ssid, auto})
+	}
+	m.savedTable.SetRows(rows)
+	if cur := m.savedTable.Cursor(); cur >= len(rows) && len(rows) > 0 {
+		m.savedTable.SetCursor(len(rows) - 1)
+	}
 }
 
 func (m *Model) setAPs(aps []nm.AccessPoint) {
@@ -963,13 +1167,36 @@ func (m *Model) layout() {
 		}
 	}
 	// The help bar may wrap to multiple lines on narrow terminals.
-	reserved += len(helpLines(m.width)) - 1
+	reserved += len(m.helpLines()) - 1
 
 	h := m.height - reserved
 	if h < 3 {
 		h = 3
 	}
 	m.table.SetHeight(h)
+
+	nameW, ssidW := 24, 28
+	if m.width > nameW+12+4 {
+		ssidW = m.width - nameW - 12 - 4
+		if ssidW < 12 {
+			ssidW = 12
+		}
+	}
+	m.savedTable.SetColumns([]table.Column{
+		{Title: "NAME", Width: nameW},
+		{Title: "SSID", Width: ssidW},
+		{Title: "AUTOCONNECT", Width: 12},
+	})
+	m.savedTable.SetWidth(m.width)
+	m.savedTable.SetHeight(h)
+}
+
+// helpLines returns the help bar for the current mode.
+func (m Model) helpLines() []string {
+	if m.mode == modeSaved {
+		return savedHelpLines(m.width)
+	}
+	return helpLines(m.width)
 }
 
 func (m Model) selectedAP() nm.AccessPoint {
@@ -1081,13 +1308,21 @@ func (m Model) View() string {
 
 	switch m.mode {
 	case modePassword:
+		title := "Password for " + boldStyle.Render(sanitizeSSID(m.connectSSID))
+		if m.pwdPurpose == pwdEditPassword {
+			title = "New password for " + boldStyle.Render(sanitizeSSID(savedDisplayName(m.editConn)))
+		}
 		reveal := "show"
 		if m.pwdInput.EchoMode == textinput.EchoNormal {
 			reveal = "hide"
 		}
-		body := "Password for " + boldStyle.Render(sanitizeSSID(m.connectSSID)) +
+		action := "connect"
+		if m.pwdPurpose == pwdEditPassword {
+			action = "save"
+		}
+		body := title +
 			"\n\n" + m.pwdInput.View() +
-			"\n\n" + dimStyle.Render("ctrl+r: "+reveal+"  ·  enter: connect  ·  esc: cancel")
+			"\n\n" + dimStyle.Render("ctrl+r: "+reveal+"  ·  enter: "+action+"  ·  esc: cancel")
 		b.WriteString(boxStyle.Render(body))
 
 	case modeConfirm:
@@ -1108,6 +1343,13 @@ func (m Model) View() string {
 
 	case modeDetails:
 		b.WriteString(m.detailsView())
+
+	case modeSaved:
+		if len(m.saved) == 0 {
+			b.WriteString(dimStyle.Render("no saved Wi-Fi profiles") + "\n")
+		} else {
+			b.WriteString(m.savedTable.View() + "\n")
+		}
 
 	default:
 		switch {
@@ -1135,8 +1377,8 @@ func (m Model) View() string {
 		b.WriteString("\n" + m.spinner.View() + " " + m.busy + "...")
 	}
 
-	if m.mode == modeList {
-		b.WriteString("\n\n" + helpView(m.width))
+	if m.mode == modeList || m.mode == modeSaved {
+		b.WriteString("\n\n" + strings.Join(m.helpLines(), "\n"))
 	}
 	return b.String()
 }

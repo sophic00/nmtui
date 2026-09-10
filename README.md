@@ -10,6 +10,8 @@ A terminal UI for managing Wi-Fi with NetworkManager, built with
 - Connect to networks — reuses saved profiles automatically, only prompts for
   a password when the network has no saved profile yet
 - Disconnect (`d`), forget saved networks (`f`)
+- Saved networks view (`F`): manage every Wi-Fi profile, including ones out
+  of range — connect, toggle autoconnect, change the password, forget
 - Toggle Wi-Fi radio on/off (`t`)
 - Live status bar: radio state, active connection, IP, and interface
 - Filter the network list (`/`) and sort it (`o`): signal, name, channel, or
@@ -80,12 +82,25 @@ make build            # or: make check (vet + tests), make run, make install
 | `f` | forget selected network's saved profile |
 | `i` | show network details |
 | `o` | cycle sort order (signal → name → channel → security) |
+| `F` | saved networks view |
 | `/` | filter networks |
 | `s` | speed test active connection |
 | `S` | quick speed test (5s down + 5s up) |
 | `ctrl+r` | show/hide password (at the password prompt) |
 | `esc` | clear active filter / dismiss message / cancel a pending action |
 | `q` / `ctrl+c` | quit |
+
+In the saved networks view:
+
+| Key | Action |
+| --- | --- |
+| `↑/k` `↓/j` | navigate profiles |
+| `enter` | connect to the selected profile |
+| `a` | toggle autoconnect |
+| `e` | change the saved password |
+| `f` | forget the profile |
+| `r` | reload the profile list |
+| `esc` / `F` | back to the network list |
 
 ## Notes
 
