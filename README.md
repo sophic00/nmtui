@@ -22,6 +22,8 @@ A terminal UI for managing Wi-Fi with NetworkManager, built with
   (stdlib only, no extra dependencies)
 - Connect to hidden networks by SSID (`h`)
 - Multiple Wi-Fi devices: switch the managed interface (`D`)
+- Headless `status`/`list`/`speedtest` commands with `--json` output
+- Config file for interface, polling, sorting and speed test defaults
 - Mouse wheel scrolling
 
 ## Requirements
@@ -61,7 +63,12 @@ make build            # or: make check (vet + tests), make run, make install
 ## Usage
 
 ```sh
-./nmtui [flags]
+./nmtui [flags]        # TUI
+./nmtui status [--json]
+./nmtui list [--json] [--rescan] [--interface <name>]
+./nmtui speedtest [--json] [--quick] [--server <url>] [--duration <d>] [--streams <n>]
+./nmtui version
+./nmtui help
 ```
 
 ### Flags
@@ -71,6 +78,17 @@ make build            # or: make check (vet + tests), make run, make install
 | `-i, --interface <name>` | Wi-Fi interface to manage (e.g. `wlan0`) |
 | `-v, --version` | Print version information and exit |
 | `-h, --help` | Show help information and exit |
+
+### Headless commands
+
+`status`, `list` and `speedtest` run without a terminal and support `--json`
+for scripts:
+
+```sh
+nmtui status --json | jq -r .connection
+nmtui list --json | jq -r '.[] | select(.in_use) | .ssid'
+nmtui speedtest --quick --json
+```
 
 ### Keybindings
 
@@ -106,17 +124,39 @@ In the saved networks view:
 | `r` | reload the profile list |
 | `esc` / `F` | back to the network list |
 
+## Configuration
+
+Settings are read from `$XDG_CONFIG_HOME/nmt/config` (usually
+`~/.config/nmt/config`). The format is `key = value`, `#` starts a comment:
+
+```ini
+interface = wlan0              # optional; auto-detected when unset
+poll_interval = 5s
+sort = signal                  # signal | name | channel | security
+speedtest_server = https://speed.cloudflare.com
+speedtest_duration = 10s
+speedtest_streams = 4
+speedtest_quick = false
+```
+
+Precedence: command-line flags > environment variables > config file >
+defaults. Environment: `NMT_CONFIG` (config path), `NMT_INTERFACE`,
+`NMT_POLL_INTERVAL`, `NMT_SPEEDTEST_SERVER`. Unknown keys and invalid values
+are ignored with a warning.
+
 ## Notes
 
-- If a saved profile has a stale password, connect will fail — press `f` to
-  forget the network, then `enter` to reconnect with the correct password.
+- If a saved profile has a stale password, connect will fail; press `F`, select
+  the profile and press `e` to update the password in place, or `f` to forget
+  the profile and connect again.
 - Hidden networks appear as `(hidden network)`. Press `h` to join one by
   SSID; the profile is then saved normally and shows up in the list.
 
 ## Layout
 
 ```
-main.go              entry point
+main.go              entry point, flags and headless subcommands
+internal/config/     key=value config file loader
 internal/nm/         nmcli wrapper (exec, terse-mode parsing, actions)
 internal/speedtest/  stdlib HTTP speed test (ping + timed download/upload)
 internal/ui/         bubbletea model, keybindings, styles

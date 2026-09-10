@@ -116,6 +116,8 @@ type Model struct {
 
 	speedResult *speedtest.Result
 	speedCfg    speedtest.Config
+	speedFull   speedtest.Config
+	speedQuick  speedtest.Config
 	speedProg   speedtest.Progress
 	speedActive bool
 	speedSSID   string
@@ -123,9 +125,33 @@ type Model struct {
 	speedCtx    context.Context
 	speedCancel context.CancelFunc
 	speedGen    int
+
+	pollEvery    time.Duration
+	defaultQuick bool
 }
 
-func NewModelWithDevice(device string) Model {
+// Options tune the model at construction. Zero values fall back to defaults.
+type Options struct {
+	Device         string
+	PollEvery      time.Duration
+	Sort           string
+	SpeedtestFull  speedtest.Config
+	SpeedtestQuick speedtest.Config
+	DefaultQuick   bool
+	Warnings       []string
+}
+
+func NewModelWithOptions(opts Options) Model {
+	if opts.PollEvery <= 0 {
+		opts.PollEvery = 5 * time.Second
+	}
+	if opts.SpeedtestFull.DownloadFor <= 0 {
+		opts.SpeedtestFull = speedtest.DefaultConfig()
+	}
+	if opts.SpeedtestQuick.DownloadFor <= 0 {
+		opts.SpeedtestQuick = speedtest.QuickConfig()
+	}
+
 	cols := []table.Column{
 		{Title: "", Width: 2},
 		{Title: "SIGNAL", Width: 6},
@@ -163,7 +189,7 @@ func NewModelWithDevice(device string) Model {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return Model{
-		ifaceOverride: device,
+		ifaceOverride: opts.Device,
 		client:        nm.NewClient(),
 		baseCtx:       ctx,
 		baseCancel:    cancel,
@@ -174,7 +200,30 @@ func NewModelWithDevice(device string) Model {
 		hiddenInput:   hidden,
 		filter:        f,
 		busy:          "scanning",
+		sort:          parseSortMode(opts.Sort),
+		pollEvery:     opts.PollEvery,
+		speedFull:     opts.SpeedtestFull,
+		speedQuick:    opts.SpeedtestQuick,
+		defaultQuick:  opts.DefaultQuick,
+		warnMsg:       strings.Join(opts.Warnings, " · "),
 	}
+}
+
+func parseSortMode(s string) sortMode {
+	switch s {
+	case "name":
+		return sortName
+	case "channel":
+		return sortChannel
+	case "security":
+		return sortSecurity
+	default:
+		return sortSignal
+	}
+}
+
+func NewModelWithDevice(device string) Model {
+	return NewModelWithOptions(Options{Device: device})
 }
 
 func NewModel() Model {
@@ -183,8 +232,12 @@ func NewModel() Model {
 
 type pollMsg time.Time
 
-func pollCmd() tea.Cmd {
-	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+func (m Model) pollCmd() tea.Cmd {
+	every := m.pollEvery
+	if every <= 0 {
+		every = 5 * time.Second
+	}
+	return tea.Tick(every, func(t time.Time) tea.Msg {
 		return pollMsg(t)
 	})
 }
@@ -206,7 +259,7 @@ func (m Model) Init() tea.Cmd {
 		m.apsCachedCmd(),
 		m.apsCmd(true),
 		m.spinner.Tick,
-		pollCmd(),
+		m.pollCmd(),
 	)
 }
 
@@ -491,7 +544,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pollMsg:
 		var cmds []tea.Cmd
-		cmds = append(cmds, pollCmd())
+		cmds = append(cmds, m.pollCmd())
 		scanning := m.busy == "" || m.busy == "scanning"
 		if scanning && m.mode == modeList && !m.speedActive {
 			cmds = append(cmds, m.stateCmd())
@@ -803,9 +856,10 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setWarn("not connected — join a network first")
 			return m, nil
 		}
-		cfg := speedtest.DefaultConfig()
-		if msg.String() == "S" {
-			cfg = speedtest.QuickConfig()
+		quick := msg.String() == "S" || m.defaultQuick
+		cfg := m.speedFull
+		if quick {
+			cfg = m.speedQuick
 		}
 		return m, m.startSpeedtest(cfg)
 	}
