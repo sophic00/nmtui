@@ -13,8 +13,11 @@ type keyMap struct {
 	Toggle     key.Binding
 	Disconnect key.Binding
 	Forget     key.Binding
+	Details    key.Binding
 	Filter     key.Binding
+	Sort       key.Binding
 	Speedtest  key.Binding
+	Quicktest  key.Binding
 	Quit       key.Binding
 }
 
@@ -24,8 +27,11 @@ var keys = keyMap{
 	Toggle:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "wifi on/off")),
 	Disconnect: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "disconnect")),
 	Forget:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "forget saved")),
+	Details:    key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "details")),
 	Filter:     key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+	Sort:       key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "sort")),
 	Speedtest:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "speedtest")),
+	Quicktest:  key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "quick test")),
 	Quit:       key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 }
 
@@ -33,10 +39,11 @@ var keys = keyMap{
 // is handled by helpLines, which wraps to the terminal width, so no
 // abbreviated labels are needed.
 func helpParts(width int) []string {
-	parts := make([]string, 0, 8)
+	parts := make([]string, 0, 11)
 	for _, b := range []key.Binding{
 		keys.Connect, keys.Rescan, keys.Toggle, keys.Disconnect,
-		keys.Forget, keys.Filter, keys.Speedtest, keys.Quit,
+		keys.Forget, keys.Details, keys.Filter, keys.Sort,
+		keys.Speedtest, keys.Quicktest, keys.Quit,
 	} {
 		h := b.Help()
 		parts = append(parts, dimStyle.Render(h.Key)+" "+h.Desc)

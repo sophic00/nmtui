@@ -98,6 +98,7 @@ type Progress struct {
 	Elapsed     time.Duration
 	TotalBytes  int64
 	InstantMbps float64
+	AvgMbps     float64
 }
 
 func FormatMbps(m float64) string {
@@ -167,7 +168,9 @@ func Run(ctx context.Context, cfg Config, report func(Progress)) (Result, error)
 func runPing(ctx context.Context, client *http.Client, cfg Config) (latencyMs, jitterMs float64, err error) {
 	url := cfg.BaseURL + "/__down?bytes=0"
 	samples := make([]float64, 0, cfg.PingSamples)
-	for i := 0; i < cfg.PingSamples; i++ {
+	// The first request opens the connection (DNS, TCP, TLS); measure it only
+	// as a warm-up so the samples reflect network latency, not setup.
+	for i := 0; i <= cfg.PingSamples; i++ {
 		if err := ctx.Err(); err != nil {
 			return 0, 0, err
 		}
@@ -185,8 +188,10 @@ func runPing(ctx context.Context, client *http.Client, cfg Config) (latencyMs, j
 		if resp.StatusCode >= 400 {
 			return 0, 0, fmt.Errorf("ping: server returned %s", resp.Status)
 		}
-		samples = append(samples, float64(time.Since(start).Microseconds())/1000)
-		if i+1 < cfg.PingSamples {
+		if i > 0 {
+			samples = append(samples, float64(time.Since(start).Microseconds())/1000)
+		}
+		if i < cfg.PingSamples {
 			select {
 			case <-ctx.Done():
 				return 0, 0, ctx.Err()
@@ -281,6 +286,8 @@ func runDownload(ctx context.Context, client *http.Client, cfg Config, report fu
 	}
 
 	start := time.Now()
+	lastTime := start
+	var lastBytes int64
 	ticker := time.NewTicker(progressTick)
 	defer ticker.Stop()
 	done := make(chan struct{})
@@ -292,10 +299,18 @@ loop:
 	for {
 		select {
 		case <-ticker.C:
-			el := time.Since(start)
+			now := time.Now()
 			n := total.Load()
+			inst := Mbps(n-lastBytes, now.Sub(lastTime))
+			lastBytes, lastTime = n, now
 			if report != nil {
-				report(Progress{Phase: PhaseDownload, Elapsed: el, TotalBytes: n, InstantMbps: Mbps(n, el)})
+				report(Progress{
+					Phase:       PhaseDownload,
+					Elapsed:     now.Sub(start),
+					TotalBytes:  n,
+					InstantMbps: inst,
+					AvgMbps:     Mbps(n, now.Sub(start)),
+				})
 			}
 		case <-done:
 			break loop
@@ -328,7 +343,7 @@ loop:
 		return 0, fmt.Errorf("download: no data received (%d failed requests)", failures.Load())
 	}
 	if report != nil {
-		report(Progress{Phase: PhaseDownload, Elapsed: elapsed, TotalBytes: n, InstantMbps: Mbps(n, elapsed)})
+		report(Progress{Phase: PhaseDownload, Elapsed: elapsed, TotalBytes: n, InstantMbps: Mbps(n, elapsed), AvgMbps: Mbps(n, elapsed)})
 	}
 	return Mbps(n, elapsed), nil
 }
@@ -396,6 +411,8 @@ func runUpload(ctx context.Context, client *http.Client, cfg Config, report func
 	}
 
 	start := time.Now()
+	lastTime := start
+	var lastBytes int64
 	ticker := time.NewTicker(progressTick)
 	defer ticker.Stop()
 	done := make(chan struct{})
@@ -407,10 +424,18 @@ loop:
 	for {
 		select {
 		case <-ticker.C:
-			el := time.Since(start)
+			now := time.Now()
 			n := total.Load()
+			inst := Mbps(n-lastBytes, now.Sub(lastTime))
+			lastBytes, lastTime = n, now
 			if report != nil {
-				report(Progress{Phase: PhaseUpload, Elapsed: el, TotalBytes: n, InstantMbps: Mbps(n, el)})
+				report(Progress{
+					Phase:       PhaseUpload,
+					Elapsed:     now.Sub(start),
+					TotalBytes:  n,
+					InstantMbps: inst,
+					AvgMbps:     Mbps(n, now.Sub(start)),
+				})
 			}
 		case <-done:
 			break loop
@@ -441,7 +466,7 @@ loop:
 		return 0, fmt.Errorf("upload: no data received (%d failed requests)", failures.Load())
 	}
 	if report != nil {
-		report(Progress{Phase: PhaseUpload, Elapsed: elapsed, TotalBytes: n, InstantMbps: Mbps(n, elapsed)})
+		report(Progress{Phase: PhaseUpload, Elapsed: elapsed, TotalBytes: n, InstantMbps: Mbps(n, elapsed), AvgMbps: Mbps(n, elapsed)})
 	}
 	return Mbps(n, elapsed), nil
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -504,12 +505,12 @@ func TestHelpViewFitsWidth(t *testing.T) {
 		}
 	}
 	// Wide terminals keep the full one-line bar with full descriptions.
-	wide := helpLines(140)
+	wide := helpLines(220)
 	if len(wide) != 1 {
-		t.Errorf("width 140: expected 1 help line, got %d: %q", len(wide), wide)
+		t.Errorf("width 220: expected 1 help line, got %d: %q", len(wide), wide)
 	}
 	if !strings.Contains(wide[0], "speedtest") {
-		t.Errorf("width 140: expected full descriptions, got %q", wide[0])
+		t.Errorf("width 220: expected full descriptions, got %q", wide[0])
 	}
 	// Full words are never abbreviated, even on narrow terminals where
 	// the bar wraps instead.
@@ -722,5 +723,170 @@ func TestIPOnlyAndConnectivityNote(t *testing.T) {
 	}
 	if got := connectivityNote("limited"); got != "limited" {
 		t.Errorf("connectivityNote(limited) = %q, want limited", got)
+	}
+}
+
+func TestDetailsMode(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.aps = []nm.AccessPoint{{
+		SSID: "HomeNet", BSSID: "AA:BB:CC:DD:EE:01", Signal: 80,
+		Security: "WPA3", Chan: "36", Freq: "5180 MHz", Rate: "1170 Mbit/s", Mode: "Infra",
+	}}
+	m.applyFilter()
+
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	mod := m2.(Model)
+	if mod.mode != modeDetails {
+		t.Fatalf("i should open details, got mode %v", mod.mode)
+	}
+	view := mod.detailsView()
+	for _, want := range []string{"HomeNet", "AA:BB:CC:DD:EE:01", "5180 MHz", "1170 Mbit/s", "WPA3", "80%"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("details view missing %q:\n%s", want, view)
+		}
+	}
+
+	m3, _ := mod.updateDetails(tea.KeyMsg{Type: tea.KeyEsc})
+	if m3.(Model).mode != modeList {
+		t.Error("esc should close details")
+	}
+	m4, _ := mod.updateDetails(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if m4.(Model).mode != modeList {
+		t.Error("i should toggle details closed")
+	}
+}
+
+func TestSortCycle(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.aps = []nm.AccessPoint{
+		{SSID: "Bravo", Signal: 90, Chan: "11"},
+		{SSID: "alpha", Signal: 50, Chan: "1"},
+		{SSID: "Charlie", Signal: 70, Chan: "36"},
+	}
+	m.applyFilter()
+	if m.visible[0].SSID != "Bravo" {
+		t.Fatalf("default signal sort wrong: %+v", m.visible)
+	}
+
+	keyO := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}}
+	m2, _ := m.updateList(keyO) // name
+	mod := m2.(Model)
+	if mod.sort != sortName || mod.visible[0].SSID != "alpha" {
+		t.Errorf("name sort wrong: mode=%v first=%q", mod.sort, mod.visible[0].SSID)
+	}
+
+	m3, _ := mod.updateList(keyO) // channel
+	mod3 := m3.(Model)
+	if mod3.sort != sortChannel || mod3.visible[0].SSID != "alpha" {
+		t.Errorf("channel sort wrong: mode=%v first=%q", mod3.sort, mod3.visible[0].SSID)
+	}
+
+	m4, _ := mod3.updateList(keyO) // security
+	mod4 := m4.(Model)
+	if mod4.sort != sortSecurity {
+		t.Errorf("expected security sort, got %v", mod4.sort)
+	}
+
+	m5, _ := mod4.updateList(keyO) // back to signal
+	mod5 := m5.(Model)
+	if mod5.sort != sortSignal || mod5.visible[0].SSID != "Bravo" {
+		t.Errorf("cycle back to signal wrong: mode=%v first=%q", mod5.sort, mod5.visible[0].SSID)
+	}
+}
+
+func TestPasswordRevealToggle(t *testing.T) {
+	m := NewModel()
+	m.mode = modePassword
+	if m.pwdInput.EchoMode != textinput.EchoPassword {
+		t.Fatal("password should be masked by default")
+	}
+
+	m2, _ := m.updatePassword(tea.KeyMsg{Type: tea.KeyCtrlR})
+	mod := m2.(Model)
+	if mod.pwdInput.EchoMode != textinput.EchoNormal {
+		t.Error("ctrl+r should reveal the password")
+	}
+	m3, _ := mod.updatePassword(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if m3.(Model).pwdInput.EchoMode != textinput.EchoPassword {
+		t.Error("ctrl+r should mask the password again")
+	}
+}
+
+func TestQuickSpeedtestUsesQuickConfig(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	m.wifi.Active.Name = "HomeNet"
+	m2, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	mod := m2.(Model)
+	if mod.mode != modeSpeedtest {
+		t.Fatalf("S should start a speedtest, got mode %v", mod.mode)
+	}
+	if mod.speedCfg != speedtest.QuickConfig() {
+		t.Errorf("S should use QuickConfig, got %+v", mod.speedCfg)
+	}
+	mod.shutdown()
+}
+
+func TestDetailsAndSortBlockedWhileConnecting(t *testing.T) {
+	m := NewModel()
+	m.busy = "connecting to HomeNet"
+	m.actionCancel = func() {}
+
+	_, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	if cmd != nil {
+		t.Error("S while a mutating action is busy should be ignored")
+	}
+}
+
+func TestLongMessageWrapsAndReservesLines(t *testing.T) {
+	m := NewModel()
+	m.width = 40
+	m.height = 24
+	m.busy = ""
+	m.setErr(errors.New(strings.Repeat("long error ", 10)))
+	if _, lines := m.statusMessage(); lines < 2 {
+		t.Errorf("long error should wrap to multiple lines, got %d", lines)
+	}
+	m.layout()
+	longHeight := m.table.Height()
+
+	short := NewModel()
+	short.width = 40
+	short.height = 24
+	short.busy = ""
+	short.setErr(errors.New("short"))
+	short.layout()
+	if short.table.Height() <= longHeight {
+		t.Errorf("wrapped message should reserve more lines: long=%d short=%d", longHeight, short.table.Height())
+	}
+}
+
+func TestMouseWheelScrollsTable(t *testing.T) {
+	m := NewModel()
+	m.busy = ""
+	for i := 0; i < 30; i++ {
+		m.aps = append(m.aps, nm.AccessPoint{SSID: fmt.Sprintf("Net%02d", i), Signal: 30 + i})
+	}
+	m.applyFilter()
+	m.table.SetCursor(5)
+
+	m2, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	mod := m2.(Model)
+	if mod.table.Cursor() != 6 {
+		t.Errorf("wheel down should move cursor to 6, got %d", mod.table.Cursor())
+	}
+	m3, _ := mod.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	mod3 := m3.(Model)
+	if got := mod3.table.Cursor(); got != 5 {
+		t.Errorf("wheel up should move cursor to 5, got %d", got)
+	}
+
+	// Wheel events must not move the cursor while an overlay is open.
+	mod3.mode = modeDetails
+	m4, _ := mod3.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if got := m4.(Model).table.Cursor(); got != 5 {
+		t.Errorf("wheel in details mode should be ignored, got cursor %d", got)
 	}
 }

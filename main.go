@@ -53,7 +53,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(ui.NewModelWithDevice(iface), tea.WithAltScreen())
+	p := tea.NewProgram(ui.NewModelWithDevice(iface), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

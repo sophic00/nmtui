@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"nmtui/internal/nm"
 	"nmtui/internal/speedtest"
@@ -25,7 +28,30 @@ const (
 	modePassword
 	modeConfirm
 	modeSpeedtest
+	modeDetails
 )
+
+type sortMode int
+
+const (
+	sortSignal sortMode = iota
+	sortName
+	sortChannel
+	sortSecurity
+)
+
+func (s sortMode) String() string {
+	switch s {
+	case sortName:
+		return "name"
+	case sortChannel:
+		return "channel"
+	case sortSecurity:
+		return "security"
+	default:
+		return "signal"
+	}
+}
 
 type confirmKind int
 
@@ -66,12 +92,15 @@ type Model struct {
 	errMsg        string
 	filtering     bool
 	connectSSID   string
+	detailAP      nm.AccessPoint
+	sort          sortMode
 	pendingForget nm.SavedConnection
 	ifaceOverride string
 	width         int
 	height        int
 
 	speedResult *speedtest.Result
+	speedCfg    speedtest.Config
 	speedProg   speedtest.Progress
 	speedActive bool
 	speedSSID   string
@@ -314,13 +343,16 @@ type speedDoneMsg struct {
 // startSpeedtest enters speedtest mode and launches the time-based
 // download/upload run plus a progress listener. Caller must have checked
 // connection state and busy flag.
-func (m *Model) startSpeedtest() tea.Cmd {
+func (m *Model) startSpeedtest(cfg speedtest.Config) tea.Cmd {
+	if cfg.DownloadFor <= 0 || cfg.UploadFor <= 0 {
+		cfg = speedtest.DefaultConfig()
+	}
 	if m.speedCancel != nil {
 		m.speedCancel()
 		m.speedCancel = nil
 	}
-	// 10s down + 10s up + ping overhead; give workers grace to exit.
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	// Phase windows plus ping and worker grace.
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.DownloadFor+cfg.UploadFor+20*time.Second)
 	m.speedCtx = ctx
 	m.speedCancel = cancel
 	m.speedGen++
@@ -328,6 +360,7 @@ func (m *Model) startSpeedtest() tea.Cmd {
 	m.mode = modeSpeedtest
 	m.speedActive = true
 	m.speedResult = nil
+	m.speedCfg = cfg
 	m.speedProg = speedtest.Progress{}
 	m.speedSSID = m.wifi.Active.Name
 	m.speedCh = make(chan speedtest.Progress, 32)
@@ -336,7 +369,6 @@ func (m *Model) startSpeedtest() tea.Cmd {
 	ch := m.speedCh
 
 	runCmd := func() tea.Msg {
-		cfg := speedtest.DefaultConfig()
 		res, err := speedtest.Run(ctx, cfg, func(p speedtest.Progress) {
 			select {
 			case ch <- p:
@@ -483,6 +515,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	}
 	return m, nil
 }
@@ -502,6 +537,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateConfirm(msg)
 	case modeSpeedtest:
 		return m.updateSpeedtest(msg)
+	case modeDetails:
+		return m.updateDetails(msg)
 	default:
 		return m.updateList(msg)
 	}
@@ -573,7 +610,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// A mutating action is in flight. Allow scrolling the table
 			// while busy, but block mutating actions.
 			switch msg.String() {
-			case "r", "t", "d", "f", "s", "enter":
+			case "r", "t", "d", "f", "s", "S", "enter":
 				return m, nil
 			}
 			var cmd tea.Cmd
@@ -630,12 +667,31 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.startConnect(m.selectedAP())
 
-	case "s":
+	case "i":
+		if len(m.visible) == 0 {
+			m.setWarn("no network selected")
+			return m, nil
+		}
+		m.detailAP = m.selectedAP()
+		m.mode = modeDetails
+		return m, nil
+
+	case "o":
+		m.sort = (m.sort + 1) % (sortSecurity + 1)
+		m.applyFilter()
+		m.setInfo("sorted by " + m.sort.String())
+		return m, nil
+
+	case "s", "S":
 		if m.wifi.Active.Name == "" {
 			m.setWarn("not connected — join a network first")
 			return m, nil
 		}
-		return m, m.startSpeedtest()
+		cfg := speedtest.DefaultConfig()
+		if msg.String() == "S" {
+			cfg = speedtest.QuickConfig()
+		}
+		return m, m.startSpeedtest(cfg)
 	}
 
 	var cmd tea.Cmd
@@ -682,6 +738,13 @@ func (m Model) updatePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setInfo("")
 		ctx := m.beginAction()
 		return m, tea.Batch(m.connectCmd(ctx, ssid, pw, m.wifi.Device), m.spinner.Tick)
+	case "ctrl+r":
+		if m.pwdInput.EchoMode == textinput.EchoPassword {
+			m.pwdInput.EchoMode = textinput.EchoNormal
+		} else {
+			m.pwdInput.EchoMode = textinput.EchoPassword
+		}
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.pwdInput, cmd = m.pwdInput.Update(msg)
@@ -741,7 +804,23 @@ func (m Model) updateSpeedtest(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeList
 			return m, nil
 		}
-		return m, m.startSpeedtest()
+		cfg := m.speedCfg
+		if cfg.DownloadFor <= 0 {
+			cfg = speedtest.DefaultConfig()
+		}
+		return m, m.startSpeedtest(cfg)
+	}
+	return m, nil
+}
+
+func (m Model) updateDetails(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "i":
+		m.mode = modeList
+		return m, nil
+	case "q":
+		m.shutdown()
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -752,9 +831,9 @@ func (m *Model) setAPs(aps []nm.AccessPoint) {
 }
 
 func (m *Model) applyFilter() {
-	var selectedSSID string
+	var selectedKey string
 	if cur := m.table.Cursor(); cur >= 0 && cur < len(m.visible) {
-		selectedSSID = m.visible[cur].SSID
+		selectedKey = apKey(m.visible[cur])
 	}
 
 	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
@@ -764,6 +843,7 @@ func (m *Model) applyFilter() {
 			m.visible = append(m.visible, ap)
 		}
 	}
+	sortAPs(m.visible, m.sort)
 
 	rows := make([]table.Row, 0, len(m.visible))
 	for _, ap := range m.visible {
@@ -785,9 +865,9 @@ func (m *Model) applyFilter() {
 	}
 	m.table.SetRows(rows)
 
-	if selectedSSID != "" {
+	if selectedKey != "" {
 		for i, ap := range m.visible {
-			if ap.SSID == selectedSSID {
+			if apKey(ap) == selectedKey {
 				m.table.SetCursor(i)
 				return
 			}
@@ -801,6 +881,51 @@ func (m *Model) applyFilter() {
 			m.table.SetCursor(len(rows) - 1)
 		}
 	}
+}
+
+// apKey identifies an access point across list updates. Hidden networks have
+// no SSID, so their BSSID is the only stable key.
+func apKey(ap nm.AccessPoint) string {
+	if ap.SSID != "" {
+		return ap.SSID
+	}
+	return ap.BSSID
+}
+
+// sortAPs orders access points for display, keeping the active connection(s)
+// first regardless of the chosen sort mode.
+func sortAPs(aps []nm.AccessPoint, mode sortMode) {
+	sort.SliceStable(aps, func(i, j int) bool {
+		if aps[i].InUse != aps[j].InUse {
+			return aps[i].InUse
+		}
+		switch mode {
+		case sortName:
+			ni, nj := strings.ToLower(aps[i].SSID), strings.ToLower(aps[j].SSID)
+			if ni != nj {
+				return ni < nj
+			}
+		case sortChannel:
+			ci, cj := channelNumber(aps[i].Chan), channelNumber(aps[j].Chan)
+			if ci != cj {
+				return ci < cj
+			}
+		case sortSecurity:
+			si, sj := securityLabel(aps[i].Security), securityLabel(aps[j].Security)
+			if si != sj {
+				return si < sj
+			}
+		}
+		return aps[i].Signal > aps[j].Signal
+	})
+}
+
+func channelNumber(ch string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(ch))
+	if err != nil {
+		return 1 << 30
+	}
+	return n
 }
 
 func (m *Model) layout() {
@@ -833,7 +958,9 @@ func (m *Model) layout() {
 		reserved += 2
 	}
 	if m.errMsg != "" || m.warnMsg != "" || m.info != "" {
-		reserved++
+		if _, lines := m.statusMessage(); lines > 0 {
+			reserved += lines
+		}
 	}
 	// The help bar may wrap to multiple lines on narrow terminals.
 	reserved += len(helpLines(m.width)) - 1
@@ -893,6 +1020,41 @@ func (m *Model) setErr(err error) {
 	m.warnMsg = ""
 }
 
+// statusMessage returns the current status line wrapped to the terminal
+// width, along with the number of lines it occupies.
+func (m Model) statusMessage() (string, int) {
+	var msg, prefix string
+	var style lipgloss.Style
+	switch {
+	case m.errMsg != "":
+		msg, prefix, style = m.errMsg, "✗ ", errStyle
+	case m.warnMsg != "":
+		msg, prefix, style = m.warnMsg, "! ", warnStyle
+	case m.info != "":
+		msg, prefix, style = m.info, "✓ ", okStyle
+	default:
+		return "", 0
+	}
+	text := prefix + msg
+	if m.width > 0 {
+		text = lipgloss.NewStyle().Width(m.width).Render(text)
+	}
+	return style.Render(text), strings.Count(text, "\n") + 1
+}
+
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.mode != modeList || msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.table.MoveUp(1)
+	case tea.MouseButtonWheelDown:
+		m.table.MoveDown(1)
+	}
+	return m, nil
+}
+
 func (m Model) View() string {
 	var b strings.Builder
 
@@ -919,9 +1081,13 @@ func (m Model) View() string {
 
 	switch m.mode {
 	case modePassword:
+		reveal := "show"
+		if m.pwdInput.EchoMode == textinput.EchoNormal {
+			reveal = "hide"
+		}
 		body := "Password for " + boldStyle.Render(sanitizeSSID(m.connectSSID)) +
 			"\n\n" + m.pwdInput.View() +
-			"\n\n" + dimStyle.Render("enter: connect  ·  esc: cancel")
+			"\n\n" + dimStyle.Render("ctrl+r: "+reveal+"  ·  enter: connect  ·  esc: cancel")
 		b.WriteString(boxStyle.Render(body))
 
 	case modeConfirm:
@@ -939,6 +1105,9 @@ func (m Model) View() string {
 
 	case modeSpeedtest:
 		b.WriteString(m.speedView())
+
+	case modeDetails:
+		b.WriteString(m.detailsView())
 
 	default:
 		switch {
@@ -959,13 +1128,8 @@ func (m Model) View() string {
 	}
 
 	b.WriteString("\n")
-	switch {
-	case m.errMsg != "":
-		b.WriteString(errStyle.Render("✗ " + m.errMsg))
-	case m.warnMsg != "":
-		b.WriteString(warnStyle.Render("! " + m.warnMsg))
-	case m.info != "":
-		b.WriteString(okStyle.Render("✓ " + m.info))
+	if msg, _ := m.statusMessage(); msg != "" {
+		b.WriteString(msg)
 	}
 	if m.busy != "" && m.mode != modeSpeedtest {
 		b.WriteString("\n" + m.spinner.View() + " " + m.busy + "...")
@@ -1040,6 +1204,33 @@ func sanitizeSSID(s string) string {
 	return b.String()
 }
 
+func (m Model) detailsView() string {
+	ap := m.detailAP
+	name := sanitizeSSID(ap.SSID)
+	if name == "" {
+		name = "(hidden network)"
+	}
+	var body strings.Builder
+	body.WriteString(boldStyle.Render(name) + "\n\n")
+	fields := [][2]string{
+		{"signal", fmt.Sprintf("%s  %d%%", signalBars(ap.Signal), ap.Signal)},
+		{"security", securityLabel(ap.Security)},
+		{"bssid", ap.BSSID},
+		{"channel", ap.Chan},
+		{"frequency", ap.Freq},
+		{"rate", ap.Rate},
+		{"mode", ap.Mode},
+	}
+	for _, f := range fields {
+		if strings.TrimSpace(f[1]) == "" {
+			continue
+		}
+		fmt.Fprintf(&body, "%s  %s\n", dimStyle.Render(fmt.Sprintf("%-9s", f[0])), f[1])
+	}
+	body.WriteString("\n" + dimStyle.Render("esc: close"))
+	return boxStyle.Render(body.String())
+}
+
 func (m Model) speedView() string {
 	ssid := sanitizeSSID(m.speedSSID)
 	if ssid == "" {
@@ -1048,9 +1239,13 @@ func (m Model) speedView() string {
 	if ssid == "" {
 		ssid = "(unknown)"
 	}
-	cfg := speedtest.DefaultConfig()
+	cfg := m.speedCfg
+	if cfg.DownloadFor <= 0 {
+		cfg = speedtest.DefaultConfig()
+	}
 	title := "Speed test — " + boldStyle.Render(ssid)
-	sub := dimStyle.Render("server: " + cfg.BaseURL + "  ·  10s down + 10s up (4 streams)")
+	sub := dimStyle.Render(fmt.Sprintf("%s  ·  %.0fs down + %.0fs up (%d streams)",
+		cfg.BaseURL, cfg.DownloadFor.Seconds(), cfg.UploadFor.Seconds(), cfg.Streams))
 	var body strings.Builder
 	body.WriteString(title + "\n" + sub + "\n\n")
 
@@ -1105,8 +1300,12 @@ func (m Model) speedView() string {
 			pct = 1
 		}
 	}
-	fmt.Fprintf(&body, "%s %s  ·  %s\n", m.spinner.View(), label,
+	line := fmt.Sprintf("%s %s  ·  %s", m.spinner.View(), label,
 		boldStyle.Render(speedtest.FormatMbps(m.speedProg.InstantMbps)))
+	if m.speedProg.AvgMbps > 0 {
+		line += dimStyle.Render(fmt.Sprintf("  (avg %s)", speedtest.FormatMbps(m.speedProg.AvgMbps)))
+	}
+	body.WriteString(line + "\n")
 	body.WriteString("  " + progressBar(pct, m.speedBarWidth()) + "\n")
 	fmt.Fprintf(&body, "  %s\n\n", dimStyle.Render(fmt.Sprintf("%.0fs / %.0fs", m.speedProg.Elapsed.Seconds(), expected.Seconds())))
 	body.WriteString(dimStyle.Render("esc: cancel"))

@@ -11,10 +11,14 @@ A terminal UI for managing Wi-Fi with NetworkManager, built with
   a password when the network has no saved profile yet
 - Disconnect (`d`), forget saved networks (`f`)
 - Toggle Wi-Fi radio on/off (`t`)
-- Live status bar: radio state, active connection, and IP address
-- Filter the network list (`/`)
+- Live status bar: radio state, active connection, IP, and interface
+- Filter the network list (`/`) and sort it (`o`): signal, name, channel, or
+  security
+- Network details (`i`): BSSID, channel, frequency, rate, mode and security
 - Speed test the active connection (`s`): ping + 10s download + 10s upload
-  against Cloudflare, with live progress (stdlib only, no extra dependencies)
+  against Cloudflare, with live progress; `S` runs a quick 5s + 5s test
+  (stdlib only, no extra dependencies)
+- Mouse wheel scrolling
 
 ## Requirements
 
@@ -74,9 +78,13 @@ make build            # or: make check (vet + tests), make run, make install
 | `t` | toggle Wi-Fi on/off |
 | `d` | disconnect current network |
 | `f` | forget selected network's saved profile |
+| `i` | show network details |
+| `o` | cycle sort order (signal → name → channel → security) |
 | `/` | filter networks |
 | `s` | speed test active connection |
-| `esc` | clear active filter / dismiss message |
+| `S` | quick speed test (5s down + 5s up) |
+| `ctrl+r` | show/hide password (at the password prompt) |
+| `esc` | clear active filter / dismiss message / cancel a pending action |
 | `q` / `ctrl+c` | quit |
 
 ## Notes
